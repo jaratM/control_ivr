@@ -1,0 +1,27 @@
+pipeline:
+  num_ingestion_workers: 32
+  num_compliance_workers: 1
+  batch_size: 32
+  batch_timeout_ms: 100
+  max_queue_size: 1000
+  
+processing:
+  target_sample_rate: 16000
+  chunk_duration_sec: 25
+  overlap_sec: 0.0
+  transcription_model: "$HOME/lustre/chatgpt_os-gtcy1ct0blo/shared/control-ivr/asr-control-ivr"
+
+gpu:
+  use_multi_gpu: true
+  gpu_allocation:
+    transcription: "all"  # or specific indices [0, 1]
+    classification: "share" # share with transcription or separate
+
+logging:
+  level: "INFO"
+  file: "pipeline.log"
+
+compliance_rules:
+  max_beeps: 5
+  required_phrases: ["disclosure", "recorded"]
+  forbidden_phrases: ["guarantee"]

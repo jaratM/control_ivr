@@ -1,0 +1,11 @@
+torch>=2.0.0
+numpy
+pyyaml
+pydantic
+loguru
+librosa
+soundfile
+sqlalchemy
+psycopg2-binary
+minio
+pandas
