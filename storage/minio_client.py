@@ -9,7 +9,7 @@ from typing import List, Generator, Optional, Any
 class MinioStorage:
     def __init__(self, endpoint: str, access_key: str, secret_key: str, bucket_name: str = "calls-data", secure: bool = False):
         self.client = Minio(
-            endpoint,
+            endpoint=endpoint,
             access_key=access_key,
             secret_key=secret_key,
             secure=secure
@@ -20,8 +20,9 @@ class MinioStorage:
     def _ensure_bucket(self):
         """Ensures the bucket exists."""
         try:
-            if not self.client.bucket_exists(self.bucket_name):
-                self.client.make_bucket(self.bucket_name)
+            # Updated to use keyword arguments for MinIO SDK compatibility
+            if not self.client.bucket_exists(bucket_name=self.bucket_name):
+                self.client.make_bucket(bucket_name=self.bucket_name)
                 logger.info(f"Created bucket: {self.bucket_name}")
         except S3Error as e:
             logger.error(f"MinIO Bucket Error: {e}")
@@ -29,7 +30,7 @@ class MinioStorage:
     def list_objects(self, prefix: str = "", recursive: bool = True) -> Generator[str, None, None]:
         """Lists objects in the bucket."""
         try:
-            objects = self.client.list_objects(self.bucket_name, prefix=prefix, recursive=recursive)
+            objects = self.client.list_objects(bucket_name=self.bucket_name, prefix=prefix, recursive=recursive)
             for obj in objects:
                 yield obj.object_name
         except S3Error as e:
@@ -38,7 +39,7 @@ class MinioStorage:
     def get_file(self, object_name: str) -> Optional[bytes]:
         """Retrieves a file's content."""
         try:
-            response = self.client.get_object(self.bucket_name, object_name)
+            response = self.client.get_object(bucket_name=self.bucket_name, object_name=object_name)
             data = response.read()
             response.close()
             response.release_conn()
@@ -61,7 +62,8 @@ class MinioStorage:
     def upload_file(self, object_name: str, file_path: str):
         """Uploads a file from local path."""
         try:
-            self.client.fput_object(self.bucket_name, object_name, file_path)
+            # fput_object(bucket_name, object_name, file_path, ...)
+            self.client.fput_object(bucket_name=self.bucket_name, object_name=object_name, file_path=file_path)
             logger.info(f"Uploaded {file_path} to {object_name}")
         except S3Error as e:
             logger.error(f"Error uploading {object_name}: {e}")
@@ -69,10 +71,6 @@ class MinioStorage:
     def download_file(self, object_name: str, file_path: str):
         """Downloads a file to local path."""
         try:
-            self.client.fget_object(self.bucket_name, object_name, file_path)
+            self.client.fget_object(bucket_name=self.bucket_name, object_name=object_name, file_path=file_path)
         except S3Error as e:
             logger.error(f"Error downloading {object_name}: {e}")
-
-# Singleton or factory can be defined here if needed, 
-# but for now we'll let the orchestrator instantiate it.
-

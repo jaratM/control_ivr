@@ -25,3 +25,53 @@ compliance_rules:
   max_beeps: 5
   required_phrases: ["disclosure", "recorded"]
   forbidden_phrases: ["guarantee"]
+
+storage:
+  endpoint: "localhost:5058"
+  access_key: "admin"
+  secret_key: "password123"
+  bucket_name: "calls-data"
+  secure: false
+
+database:
+  url: "postgresql://user:password@localhost:5433/compliance_db"
+
+csv_mappings:
+  acquisition:
+    ADSL:
+      date_commande: "date_commande"
+      date_last_status: "date_suspension"
+      numero_de_contact: "client_number"
+      statut_de_degroupage_iam: status
+      statut_commande: status_commande
+      inwib2c_order__c: numero_commande
+      inwib2c_degroupage_num__c: numero_ordre
+      premiere_date_recyclage: "premiere_date_recyclage"
+      deuxieme_date_recyclage: "deuxieme_date_recyclage"
+      troisieme_date_recyclage: "troisieme_date_recyclage"
+      quatrieme_date_recyclage: "quatrieme_date_recyclage"
+      cinquieme_date_recyclage: "cinquieme_date_recyclage"
+      sixieme_date_recyclage: "sixieme_date_recyclage"
+    VULA:
+      createddate: "date_commande"
+      lastmodifieddate: "date_suspension"
+      inwib2c_numerocontact__c: "client_number"
+      inwib2c_statut_demande__c: "status_commande"
+      inwib2c_motif__c: "status"
+      inwib2c_order__c: numero_commande
+      premiere_date_recyclage: "premiere_date_recyclage"
+      deuxieme_date_recyclage: "deuxieme_date_recyclage"
+      troisieme_date_recyclage: "troisieme_date_recyclage"
+      quatrieme_date_recyclage: "quatrieme_date_recyclage"
+      cinquieme_date_recyclage: "cinquieme_date_recyclage"
+      sixieme_date_recyclage: "sixieme_date_recyclage"
+  SAV:
+    Date envoi IAM: "date_commande"  
+    Date suspension: "date_suspension"
+    Motif suspension: "status"
+    Catégorie: "categorie"
+    Date réouverture systeme: "date_reouverture_systeme"
+    Date recyclage: "date_recyclage"
+    Commentaire envoi IAM: "commentaire_envoi_iam"
+    Numéro chez l’opérateur d’infrastructure: "numero_operateur_infrastructure"
+    Numéro: "numero_commande"

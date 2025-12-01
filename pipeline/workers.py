@@ -5,8 +5,8 @@ from modules.frequency import FrequencyAnalyzer
 from modules.metadata import MetadataExtractor
 from modules.transcription import Transcriber
 from modules.classification import Classifier
-from modules.compliance import ComplianceVerifier, ComplianceInput
-from modules.types import AudioSegment, ClassificationInput
+from modules.compliance import ComplianceVerifier
+from modules.types import AudioSegment, ClassificationInput, ComplianceInput
 
 # --- Ingestion Worker ---
 def ingestion_worker(input_queue, segment_queue, assembly_queue, config):

@@ -1,3 +1,4 @@
+from telnetlib import STATUS
 from sqlalchemy import Column, String, DateTime, Integer, Boolean, ForeignKey, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship, declarative_base
@@ -17,6 +18,14 @@ class ManifestStatus(enum.Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
 
+class ManifestCallStatus(enum.Enum):
+    CLIENT_INJOINABLE = "CLIENT_INJOINABLE"
+    CLIENT_REPORTE_RDV = "CLIENT_REPORTE_RDV"
+    CLIENT_REFUSE_INSTALLATION = "CLIENT_REFUSE_INSTALLATION"
+    CLIENT_ABSCENT = "CLIENT_ABSCENT"
+    ABSENCE_ROUTEUR_CLIENT = "ABSENCE_ROUTEUR_CLIENT"
+    LOCAL_FERME = "LOCAL_FERME"
+    
 class Call(Base):
     __tablename__ = 'calls'
 
@@ -37,6 +46,7 @@ class Call(Base):
 
     # Relationships
     verification_results = relationship("VerificationResult", back_populates="call", cascade="all, delete-orphan")
+    manifest_calls = relationship("ManifestCall", back_populates="call", cascade="all, delete-orphan")
 
 class Manifest(Base):
     __tablename__ = 'manifests'
@@ -46,6 +56,19 @@ class Manifest(Base):
     status = Column(SQLEnum(ManifestStatus), default=ManifestStatus.PROCESSING)
     received_at = Column(DateTime, default=datetime.utcnow)
     processed_at = Column(DateTime, nullable=True)
+
+    calls = relationship("ManifestCall", back_populates="manifest", cascade="all, delete-orphan")
+
+class ManifestCall(Base):
+    __tablename__ = 'manifest_calls'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    manifest_id = Column(String, ForeignKey('manifests.id'), nullable=False)
+    call_id = Column(String, ForeignKey('calls.call_id'), nullable=False)
+    status = Column(SQLEnum(ManifestCallStatus), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    manifest = relationship("Manifest", back_populates="calls")
+    call = relationship("Call", back_populates="manifest_calls")
 
 class VerificationResult(Base):
     __tablename__ = 'verification_results'
