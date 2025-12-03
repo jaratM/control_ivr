@@ -2,9 +2,13 @@ import multiprocessing
 import yaml
 import glob
 import time
+import pandas as pd
+from typing import List
 from loguru import logger
 from .workers import ingestion_worker, batcher_worker, gpu_worker, assembler_worker, classification_worker
 from .utils import setup_logging
+# from modules.compliance import ComplianceVerifier, ComplianceInput
+from modules.compliance import ComplianceVerifier
 
 class PipelineOrchestrator:
     def __init__(self, config_path: str):
@@ -13,8 +17,9 @@ class PipelineOrchestrator:
             
         setup_logging(self.config)
         self.manager = multiprocessing.Manager()
+        self.verifier = ComplianceVerifier()
         
-    def run(self, input_directory: str):
+    def run(self, df: pd.DataFrame, calls_metadata: List, manifest_type: str):
         logger.info("Starting Pipeline Orchestration")
         
         # 1. Setup Queues
@@ -26,12 +31,15 @@ class PipelineOrchestrator:
         result_queue = self.manager.Queue()
         
         # 2. Discover Files
-        files = glob.glob(f"{input_directory}/*.ogg") 
-        logger.info(f"Found {len(files)} audio files")
+        logger.info(f"Found {len(calls_metadata)} calls")
         
-        for f in files:
-            path_queue.put(f)
-            
+        compliance_df = self.verifier.verify_compliance(df, calls_metadata, manifest_type)
+        compliance_df.to_csv(f"data/compliance_df{manifest_type}.csv", index=False)
+        
+        for call in calls_metadata:
+            if call and len(call) > 0:
+                path_queue.put(call[0])
+
         # Poison pills for Ingestion Workers
         num_ingestion = self.config['pipeline']['num_ingestion_workers']
         for _ in range(num_ingestion):

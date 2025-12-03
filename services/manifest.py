@@ -147,7 +147,7 @@ class ManifestProcessor:
         # Rename columns
         df = df.rename(columns=config_mapping)
         logger.info(f"Initial rows: {len(df)}")
-        logger.info(f"Columns: {df.columns}")
+        # logger.info(f"Columns: {df.columns}")
         # Filter by status
         # Pre-convert date_suspension for filtering if it exists
         if "date_suspension" in df.columns:
@@ -157,7 +157,9 @@ class ManifestProcessor:
         logger.info(f"Rows after status filter: {len(df)}")
         
         # Deduplicate
-        df = df.sort_values('client_number', ascending=False)
+        # Sort by client_number and then by date_suspension (newest/most recent last)
+        df = df.sort_values(['client_number', 'date_suspension'], ascending=[False, False])
+        # Drop duplicates based on client_number, keeping the most recent (last updated) date_suspension for each client
         df = df.drop_duplicates(subset='client_number', keep='first')
         
         # Convert date columns
@@ -172,6 +174,8 @@ class ManifestProcessor:
         
         calls_metadata = self._extract_calls_metadata(df)
         logger.info(f"Calls found: {len([c for c in calls_metadata if c])}")
+        df = df[list(config_mapping.values())]
+        df['Nbr_tentatives_appel'] = [len(c) for c in calls_metadata]
         return df, calls_metadata
 
     def _parse_sav(self, csv_path: str, date_suspension: Optional[datetime]) -> Tuple[pd.DataFrame, List[Call]]:
@@ -184,22 +188,17 @@ class ManifestProcessor:
             df["date_suspension"] = pd.to_datetime(df["date_suspension"], errors='coerce')
             
         # Filter by suspension status
-        mask = (
-            (df.status.str.lower().isin(SAV_STATUSES))
-        )
-        if date_suspension:
-            # Ensure date_suspension arg is datetime
-            if isinstance(date_suspension, str):
-                date_suspension = pd.to_datetime(date_suspension)
-            mask = mask & (df.date_suspension.dt.date == date_suspension.date())
-        df = df[mask]
+        df = self._filter_sav_status(df, date_suspension)
         logger.info(f"Rows after SAV status filter: {len(df)}")
         
         # Extract contact phone from comments
-        df["client_number"] = df["commentaire_envoi_iam"].apply(extract_contact_phone)
+        df["client_number"] = df["client_number"].apply(extract_contact_phone)
         df = df.dropna(subset=["client_number"])
         logger.info(f"Rows with valid extracted phone: {len(df)}")
-        df = df.sort_values('client_number', ascending=False)
+        
+        # Sort by client_number and then by date_suspension (newest/most recent last)
+        df = df.sort_values(['client_number', 'date_suspension'], ascending=[False, False])
+        # Drop duplicates based on client_number, keeping the most recent (last updated) date_suspension for each client
         df = df.drop_duplicates(subset='client_number', keep='first')
         
         # Convert date columns
@@ -208,7 +207,21 @@ class ManifestProcessor:
 
         calls_metadata = self._extract_calls_metadata(df)
         logger.info(f"Calls found (SAV): {len([c for c in calls_metadata if c])}")
+        df = df[self.config['csv_mappings']['SAV'].values()]
+        df['Nbr_tentatives_appel'] = [len(c) for c in calls_metadata]
         return df, calls_metadata
+
+    def _filter_sav_status(self, df: pd.DataFrame, date_suspension: Union[datetime, str, None]) -> pd.DataFrame:
+        """Filter SAV DataFrame by status conditions."""
+        mask = (
+            (df.status.str.lower().isin(SAV_STATUSES))
+        )
+        if date_suspension:
+            # Ensure date_suspension arg is datetime
+            if isinstance(date_suspension, str):
+                date_suspension = pd.to_datetime(date_suspension)
+            mask = mask & (df.date_suspension.dt.date == date_suspension.date())
+        return df[mask].reset_index(drop=True)
 
     def _filter_acquisition_status(self, df: pd.DataFrame, date_suspension: Union[datetime, str, None]) -> pd.DataFrame:
         """Filter acquisition DataFrame by status conditions."""
@@ -223,7 +236,7 @@ class ManifestProcessor:
             
             # Filter comparing dates
             mask = mask & (df.date_suspension.dt.date == date_suspension.date())
-        return df[mask]
+        return df[mask].reset_index(drop=True)
 
     def _convert_date_columns(self, df: pd.DataFrame, date_columns: List[str]) -> pd.DataFrame:
         """Convert date columns to datetime dtype."""
@@ -253,7 +266,7 @@ class ManifestProcessor:
         df["date_commande "] = df.apply(find_best_recyclage_date, axis=1)
         return df
 
-    def _extract_calls_metadata(self, df: pd.DataFrame) -> List[Call]:
+    def _extract_calls_metadata(self, df: pd.DataFrame) -> List[List[dict]]:
         """Extract audio files from the manifest."""
         calls_metadata = []
         for _, row in df.iterrows():
@@ -267,6 +280,11 @@ class ManifestProcessor:
             
             calls = get_calls(self.db, client_number, date_commande, date_suspension, strategy=strategy)
             
+            if calls is None:
+                calls = []
+            elif isinstance(calls, dict):
+                calls = [calls]
+            # Extend the calls_metadata list with the normalized list of calls (could be empty, one, or many)
             calls_metadata.append(calls)
             
         return calls_metadata

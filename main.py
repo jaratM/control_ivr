@@ -13,7 +13,6 @@ def main():
     parser.add_argument("--config", type=str, default="config/config.yaml", help="Path to configuration file")
     
     args = parser.parse_args()
-    
 
     # Load config
     with open(args.config, 'r') as f:
@@ -46,10 +45,24 @@ def main():
                     
                     for manifest_file in manifest_files:
                         local_path = os.path.join(temp_dir, manifest_file)
+                        # Ensure subdirectories exist in temp_dir if manifest_file contains paths
+                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                        
                         minio.download_file(manifest_file, local_path)
                         logger.info(f"Processing manifest: {manifest_file}")
                         df, calls_metadata = processor.process_manifest(local_path, '2025-11-19')
-                        results = orchestrator.run(df, calls_metadata)
+                        output_dir = "data/manifests/19-11-2025"
+                        os.makedirs(output_dir, exist_ok=True)
+                        output_filename = os.path.basename(manifest_file)
+                        output_path = os.path.join(output_dir, output_filename)
+                        # Save calls_metadata as a JSON file in the same output_dir as the manifest
+                        import json
+                        calls_metadata_path = os.path.splitext(output_path)[0] + "_calls_metadata.json"
+                        with open(calls_metadata_path, "w", encoding="utf-8") as f:
+                            json.dump(calls_metadata, f, ensure_ascii=False, indent=2, default=str)
+                        manifest_type = 'ADSL_INSTALL' if 'crc_adsl' in manifest_file.lower() else 'FTTH_VULA_INSTALL'
+                        # df.to_csv(output_path, index=False)
+                        results = orchestrator.run(df, calls_metadata, manifest_type)
                 finally:
                     db.close()
         else:
@@ -58,15 +71,6 @@ def main():
     except Exception as e:
         logger.error(f"Error processing manifests from Minio: {e}")
 
-    return 0
-    
-    # Output results summary
-    compliant_count = sum(1 for r in results if r.is_compliant)
-    logger.info(f"Summary: {compliant_count}/{len(results)} files compliant.")
-    
-    for res in results:
-        if not res.is_compliant:
-            logger.warning(f"Non-compliant file {res.file_id}: {res.issues}")
 
 if __name__ == "__main__":
     main()

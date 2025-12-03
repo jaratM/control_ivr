@@ -1,59 +1,123 @@
 import time
 import queue
+import os
+import tempfile
+import soundfile as sf
 from loguru import logger
 from modules.frequency import FrequencyAnalyzer
 from modules.metadata import MetadataExtractor
 from modules.transcription import Transcriber
 from modules.classification import Classifier
 from modules.compliance import ComplianceVerifier
-from modules.types import AudioSegment, ClassificationInput, ComplianceInput
+from modules.types import AudioSegment, ClassificationInput, ComplianceInput, AudioMetadata
+from storage.minio_client import MinioStorage
 
 # --- Ingestion Worker ---
 def ingestion_worker(input_queue, segment_queue, assembly_queue, config):
     freq_analyzer = FrequencyAnalyzer()
-    meta_extractor = MetadataExtractor()
+    
+    # Initialize Minio
+    minio_config = config.get('storage', {})
+    minio = MinioStorage(
+        endpoint=minio_config.get('endpoint'),
+        access_key=minio_config.get('access_key'),
+        secret_key=minio_config.get('secret_key'),
+        bucket_name=minio_config.get('bucket_name'),
+        secure=minio_config.get('secure', False)
+    )
     
     logger.info("Ingestion worker started")
     
     while True:
         try:
-            file_path = input_queue.get(timeout=1.0)
-            if file_path is None:
+            input_item = input_queue.get(timeout=1.0)
+            if input_item is None:
                 segment_queue.put(None) # Propagate stop
                 break
                 
-            logger.info(f"Processing file: {file_path}")
+            logger.info(f"Processing item: {input_item}")
             
-            # 1. Metadata
-            metadata = meta_extractor.extract(file_path)
+            file_id = None
+            local_file_path = None
             
-            # 2. Frequency Analysis
-            # Now returns 3 values: high_beeps, low_beeps, segments
-            # We pass the processing config
-            processing_config = config.get('processing', {})
-            high_beeps, low_beeps, segments = freq_analyzer.process(file_path, metadata.file_id, processing_config)
-            
-            # Use low_beeps (voicemail beeps) as the primary count for compliance, or high_beeps depending on rule
-            # Assuming low_beeps is relevant for start-of-call compliance
-            beep_count = high_beeps 
-            
-            # 3. Notify Assembler (Start of file)
-            assembly_queue.put({
-                "type": "FILE_INIT",
-                "file_id": metadata.file_id,
-                "metadata": metadata,
-                "beep_count": beep_count,
-                "total_segments": len(segments)
-            })
-            
-            # 4. Send segments to batcher
-            for seg in segments:
-                segment_queue.put(seg)
+            try:
+                # Handle dictionary input (from ManifestProcessor)
+                if isinstance(input_item, dict):
+                    call_id = input_item.get('call_id')
+                    s3_path = input_item.get('s3_path_audio')
+                    start_time = input_item.get('start_time')
+                    file_id = call_id
+                    
+                    if not s3_path:
+                        logger.error(f"No s3_path_audio for call {call_id}")
+                        continue
+
+                    # Download to temp file
+                    # Determine extension
+                    _, ext = os.path.splitext(s3_path)
+                    if not ext:
+                        ext = ".ogg" # Default
+                        
+                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp_file:
+                        local_file_path = tmp_file.name
+                    
+                    # Download using Minio client
+                    # s3_path might be like "19-11-2025/filename.ogg"
+                    # minio.download_file expects object_name, local_path
+                    minio.download_file(s3_path, local_file_path)
+                    
+                    # Create Metadata
+                    try:
+                        info = sf.info(local_file_path)
+                        duration = info.duration
+                        sample_rate = info.samplerate
+                    except Exception as e:
+                        logger.warning(f"Could not get audio info with soundfile: {e}")
+                        duration = 0.0
+                        sample_rate = 0
+                    
+                    metadata = AudioMetadata(
+                        file_path=s3_path,
+                        file_id=file_id,
+                        duration=duration,
+                        sample_rate=sample_rate,
+                        created_at=str(start_time)
+                    )
+                    
                 
+                # 2. Frequency Analysis
+                processing_config = config.get('processing', {})
+                high_beeps, low_beeps, segments = freq_analyzer.process(local_file_path, file_id, processing_config)
+                logger.info(f"Frequency analysis completed for file {file_id}. High beeps: {high_beeps}, Low beeps: {low_beeps}, Segments: {len(segments)}")
+                
+                beep_count = high_beeps 
+                
+                # 3. Notify Assembler (Start of file)
+                assembly_queue.put({
+                    "type": "FILE_INIT",
+                    "file_id": file_id,
+                    "metadata": metadata,
+                    "beep_count": beep_count,
+                    "total_segments": len(segments),
+                    "low_beeps": low_beeps
+                })
+                
+                # 4. Send segments to batcher
+                for seg in segments:
+                    segment_queue.put(seg)
+            
+            except Exception as e:
+                logger.error(f"Error processing {file_id}: {e}")
+            
+            finally:
+                # Cleanup temp file if we created one
+                if isinstance(input_item, dict) and local_file_path and os.path.exists(local_file_path):
+                    os.remove(local_file_path)
+
         except queue.Empty:
             continue
         except Exception as e:
-            logger.error(f"Error in ingestion: {e}")
+            logger.error(f"Error in ingestion worker loop: {e}")
 
 # --- Batcher Worker ---
 def batcher_worker(segment_queue, transcription_queue, config):
