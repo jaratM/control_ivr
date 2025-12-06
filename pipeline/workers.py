@@ -2,18 +2,30 @@ import time
 import queue
 import os
 import tempfile
+
+from numpy import log10
 import soundfile as sf
 from loguru import logger
 from modules.frequency import FrequencyAnalyzer
-from modules.metadata import MetadataExtractor
 from modules.transcription import Transcriber
 from modules.classification import Classifier
 from modules.compliance import ComplianceVerifier
 from modules.types import AudioSegment, ClassificationInput, ComplianceInput, AudioMetadata
 from storage.minio_client import MinioStorage
+import json
+import pandas as pd
 
 # --- Ingestion Worker ---
-def ingestion_worker(input_queue, segment_queue, assembly_queue, config):
+def ingestion_worker(input_queue, segment_queue, assembly_queue, config, ingestion_output_file):
+    """
+    Ingestion worker.
+    - Get the input item from the input queue
+    - Download the audio file from the S3 bucket
+    - Analyze the audio file
+    - Notify the assembler (start of file)
+    - Send the segments to the batcher
+    - Save the ingestion output to a file
+    """
     freq_analyzer = FrequencyAnalyzer()
     
     # Initialize Minio
@@ -25,18 +37,14 @@ def ingestion_worker(input_queue, segment_queue, assembly_queue, config):
         bucket_name=minio_config.get('bucket_name'),
         secure=minio_config.get('secure', False)
     )
-    
-    logger.info("Ingestion worker started")
-    
+        
     while True:
         try:
             input_item = input_queue.get(timeout=1.0)
             if input_item is None:
                 segment_queue.put(None) # Propagate stop
                 break
-                
-            logger.info(f"Processing item: {input_item}")
-            
+
             file_id = None
             local_file_path = None
             
@@ -64,7 +72,9 @@ def ingestion_worker(input_queue, segment_queue, assembly_queue, config):
                     # Download using Minio client
                     # s3_path might be like "19-11-2025/filename.ogg"
                     # minio.download_file expects object_name, local_path
-                    minio.download_file(s3_path, local_file_path)
+                    if not minio.download_file(s3_path, local_file_path):
+                         logger.error(f"Failed to download {s3_path}")
+                         continue
                     
                     # Create Metadata
                     try:
@@ -87,21 +97,29 @@ def ingestion_worker(input_queue, segment_queue, assembly_queue, config):
                 
                 # 2. Frequency Analysis
                 processing_config = config.get('processing', {})
-                high_beeps, low_beeps, segments = freq_analyzer.process(local_file_path, file_id, processing_config)
-                logger.info(f"Frequency analysis completed for file {file_id}. High beeps: {high_beeps}, Low beeps: {low_beeps}, Segments: {len(segments)}")
+                number_high_beeps, number_low_bips, segments = freq_analyzer.process(local_file_path, file_id, processing_config)
                 
-                beep_count = high_beeps 
+                # logger.info(f"Frequency analysis completed for file {file_id}. High beeps: {high_beeps}, Low beeps: {low_beeps}, Segments: {len(segments)}")
+                
                 
                 # 3. Notify Assembler (Start of file)
                 assembly_queue.put({
                     "type": "FILE_INIT",
                     "file_id": file_id,
                     "metadata": metadata,
-                    "beep_count": beep_count,
+                    "beep_count": number_low_bips,
                     "total_segments": len(segments),
-                    "low_beeps": low_beeps
+                    "high_beeps": number_high_beeps
                 })
                 
+                # Save ingestion output to file
+                with open(ingestion_output_file, "a") as f:
+                    f.write(json.dumps({
+                        "file_id": file_id,
+                        "high_beeps": number_high_beeps,
+                        "low_beeps": number_low_bips,
+                        "segments": len(segments)
+                    }) + "\n")
                 # 4. Send segments to batcher
                 for seg in segments:
                     segment_queue.put(seg)
@@ -150,6 +168,7 @@ def batcher_worker(segment_queue, transcription_queue, config):
             current_batch.append(item)
             
             if len(current_batch) >= batch_size:
+                logger.info(f"Putting batch of {len(current_batch)} segments to transcription queue")
                 transcription_queue.put(current_batch)
                 current_batch = []
                 last_flush = time.time()
@@ -164,6 +183,7 @@ def batcher_worker(segment_queue, transcription_queue, config):
 # --- GPU Worker ---
 def gpu_worker(transcription_queue, assembly_queue, config, gpu_id):
     # Initialize Models on specific GPU
+    
     logger.info(f"GPU Worker started on device {gpu_id}")
     device = f"cuda:{gpu_id}" if gpu_id != "cpu" else "cpu"
     
@@ -193,7 +213,7 @@ def gpu_worker(transcription_queue, assembly_queue, config, gpu_id):
             logger.error(f"Error in GPU worker: {e}")
 
 # --- Assembler Worker ---
-def assembler_worker(assembly_queue, classification_queue, config):
+def assembler_worker(assembly_queue, classification_queue, config, assembler_output_file):
     # State: file_id -> { metadata, beep_count, total_segments, received_count, text_segments: {index: text} }
     state_store = {}
     
@@ -217,7 +237,7 @@ def assembler_worker(assembly_queue, classification_queue, config):
                     "text_segments": {},
                     "received_count": 0
                 }
-                
+                logger.info(f"FILE_INIT: {file_id} initiated at Assembler worker")
             elif msg_type == "SEGMENT_RESULT":
                 if file_id not in state_store:
                     # This can happen if FILE_INIT is delayed or lost, but in local MP queues order is usually preserved 
@@ -247,7 +267,21 @@ def assembler_worker(assembly_queue, classification_queue, config):
                         metadata=store["metadata"],
                         beep_count=store["beep_count"]
                     )
-                    
+                    # INSERT_YOUR_CODE
+                    # Save class_input to a file for record-keeping or audit
+                 
+                    try:
+                        df = pd.DataFrame([{
+                            "file_id": class_input.file_id,
+                            "beep_count": class_input.beep_count,
+                            "full_transcript": class_input.full_transcript,
+                        }])
+                        
+                        # Append to CSV, write header only if file doesn't exist
+                        header = not os.path.exists(assembler_output_file)
+                        df.to_csv(assembler_output_file, mode='a', header=header, index=False)
+                    except Exception as e:
+                        logger.error(f"Failed to save class_input for file {file_id}: {e}")
                     classification_queue.put(class_input)
                     
                     # Cleanup
@@ -261,9 +295,7 @@ def assembler_worker(assembly_queue, classification_queue, config):
 def classification_worker(classification_queue, result_queue, config):
     # This worker calls AWS Bedrock (simulated)
     # It should be run in multiple threads/processes to handle I/O latency
-    
-    classifier = Classifier() # API Client
-    verifier = ComplianceVerifier()
+    classifier = Classifier(config=config) # API Client
     
     logger.info("Classification worker started")
     
@@ -282,9 +314,7 @@ def classification_worker(classification_queue, result_queue, config):
                 beep_count=input_data.beep_count,
                 classification=class_result
             )
-            
-            result = verifier.verify(compliance_input)
-            result_queue.put(result)
+            result_queue.put(compliance_input)
             
         except queue.Empty:
             continue

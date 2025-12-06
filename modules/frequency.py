@@ -62,7 +62,7 @@ class FrequencyAnalyzer:
         # Fix: Correctly count items in the dictionary, not keys
         high_beeps_val = results.get('high_freq_beeps')
         high_beeps_data = dict(high_beeps_val) if high_beeps_val else {}
-        number_bips = high_beeps_data.get('count', 0)
+        number_high_beeps = high_beeps_data.get('count', 0)
         
         low_beeps_val = results.get('low_freq_beeps')
         low_beeps_data = dict(low_beeps_val) if low_beeps_val else {}
@@ -106,6 +106,12 @@ class FrequencyAnalyzer:
             # Slice 1D tensor
             chunk_tensor = waveform_tensor[start:end]
             
+            # Check duration
+            duration = (end - start) / sample_rate
+            if duration < 0.1:
+                start += step_samples
+                continue
+
             # Convert back to numpy for AudioSegment
             chunk_np = chunk_tensor.numpy()
 
@@ -113,7 +119,7 @@ class FrequencyAnalyzer:
                 file_id=file_id,
                 segment_index=chunk_idx + 1,
                 audio_data=chunk_np,
-                duration=(end - start) / sample_rate
+                duration=duration
             )
             segments.append(seg)
             chunk_idx += 1
@@ -122,7 +128,7 @@ class FrequencyAnalyzer:
             if end >= total_samples:
                 break
             
-        return number_bips, number_low_bips, segments 
+        return number_high_beeps, number_low_bips, segments 
         
     def detect_voicemail(self, audio_path: str) -> Dict:
         """

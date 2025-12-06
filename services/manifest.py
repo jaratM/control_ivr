@@ -1,3 +1,4 @@
+from unicodedata import category
 import pandas as pd
 import re
 from datetime import datetime
@@ -105,45 +106,48 @@ class ManifestProcessor:
         self.db.add(manifest_record)
         self.db.commit()
 
+        manifest_type = ''
+        category = ''
         try:
             if 'crc_adsl' in filename.lower():
                 df, calls_metadata = self._parse_acquisition(csv_path, processing_date, manifest_type='ADSL')
+                manifest_type = 'ACQUISITION'
+                category = 'ADSL'
             elif 'crc_vula' in filename.lower():
                 df, calls_metadata = self._parse_acquisition(csv_path, processing_date, manifest_type='VULA')
+                manifest_type = 'ACQUISITION'
+                category = 'VULA'
             elif 'sav' in filename.lower():
                 df, calls_metadata = self._parse_sav(csv_path, processing_date)
+                manifest_type = 'SAV'
             else:
                 raise ValueError(f"Unsupported file type: {filename}")
     
             
-            return df, calls_metadata
+            return df, calls_metadata, manifest_type, category
 
         except Exception as e:
             logger.error(f"Error processing manifest {csv_path}: {e}")
             manifest_record.status = ManifestStatus.FAILED
             self.db.commit()
-            return pd.DataFrame(), []
+            return pd.DataFrame(), [], None, None
 
     def _parse_acquisition(self, csv_path: str, date_suspension: Optional[datetime], manifest_type: str) -> Tuple[pd.DataFrame, List[Call]]:
-        """Parse CRC ADSL or VULA CSV files (unified logic)."""
+        """
+        Parse ACQUISITION ADSL or VULA CSV files (unified logic).
+        - Read the CSV file
+        - Rename columns
+        - Filter by status
+        - Convert date columns
+        - Adjust date_commande  based on recyclage dates
+        - Extract calls metadata
+        - Only keep columns that exist in the dataframe
+        - Return the dataframe and calls metadata
+        """
         config_mapping = self.config['csv_mappings']['acquisition'].get(manifest_type, {})
         
         # Try reading with multiple fallback strategies
-        try:
-            # Common case: UTF-8
-            df = pd.read_csv(csv_path, encoding='utf-8', sep=None, engine='python')
-        except (UnicodeDecodeError, pd.errors.ParserError):
-            try:
-                # Windows encodings with semicolon separator (common in French CSVs)
-                df = pd.read_csv(csv_path, encoding='cp1252', sep=';')
-            except (UnicodeDecodeError, pd.errors.ParserError):
-                try:
-                    # Try tab separation
-                    df = pd.read_csv(csv_path, encoding='cp1252', sep='\t')
-                except Exception:
-                    # Final fallback: default separator, loose engine
-                    df = pd.read_csv(csv_path, encoding='cp1252', sep=None, engine='python')
-        
+        df = self._read_df(csv_path)
         # Rename columns
         df = df.rename(columns=config_mapping)
         logger.info(f"Initial rows: {len(df)}")
@@ -174,13 +178,29 @@ class ManifestProcessor:
         
         calls_metadata = self._extract_calls_metadata(df)
         logger.info(f"Calls found: {len([c for c in calls_metadata if c])}")
-        df = df[list(config_mapping.values())]
+        
+        # Only keep columns that exist in the dataframe
+        available_columns = [col for col in config_mapping.values() if col in df.columns]
+        df = df[available_columns]
+        
         df['Nbr_tentatives_appel'] = [len(c) for c in calls_metadata]
         return df, calls_metadata
 
     def _parse_sav(self, csv_path: str, date_suspension: Optional[datetime]) -> Tuple[pd.DataFrame, List[Call]]:
-        """Parse SAV CSV file."""
-        df = pd.read_csv(csv_path)
+        """
+        Parse SAV CSV file (unified logic ).
+        - Filter by status
+        - Extract contact phone from comments
+        - Sort by client_number and then by date_suspension (newest/most recent last)
+        - Drop duplicates based on client_number, keeping the most recent (last updated) date_suspension for each client
+        - Convert date columns
+        - Adjust date_commande  based on recyclage dates
+        - Extract calls metadata
+        - Only keep columns that exist in the dataframe
+        - Return the dataframe and calls metadata
+        """
+
+        df = self._read_df(csv_path)
         df = df.rename(columns=self.config['csv_mappings']['SAV'])
         
         # Pre-convert date_suspension for filtering if it exists
@@ -207,12 +227,46 @@ class ManifestProcessor:
 
         calls_metadata = self._extract_calls_metadata(df)
         logger.info(f"Calls found (SAV): {len([c for c in calls_metadata if c])}")
-        df = df[self.config['csv_mappings']['SAV'].values()]
+        
+        # Only keep columns that exist in the dataframe
+        available_columns = [col for col in self.config['csv_mappings']['SAV'].values() if col in df.columns]
+        df = df[available_columns]
+        
         df['Nbr_tentatives_appel'] = [len(c) for c in calls_metadata]
         return df, calls_metadata
 
+    def _read_df(self, file_path: str) -> pd.DataFrame:
+        """Read file and return DataFrame.
+        - Read the CSV file
+        - Read the file as an Excel file
+        - Return the dataframe
+        """
+        if file_path.endswith('.xlsx'):
+            df = pd.read_excel(file_path)
+        else:   
+            try:
+            # Common case: UTF-8
+                df = pd.read_csv(file_path, encoding='utf-8', sep=None, engine='python')
+            except (UnicodeDecodeError, pd.errors.ParserError):
+                try:
+                    # Windows encodings with semicolon separator (common in French CSVs)
+                    df = pd.read_csv(file_path, encoding='cp1252', sep=';')
+                except (UnicodeDecodeError, pd.errors.ParserError):
+                    try:
+                        # Try tab separation
+                        df = pd.read_csv(file_path, encoding='cp1252', sep='\t')
+                    except Exception:
+                        # Final fallback: default separator, loose engine
+                        df = pd.read_csv(file_path, encoding='cp1252', sep=None, engine='python')
+        return df
+
     def _filter_sav_status(self, df: pd.DataFrame, date_suspension: Union[datetime, str, None]) -> pd.DataFrame:
-        """Filter SAV DataFrame by status conditions."""
+        """
+        Filter SAV DataFrame by status conditions.
+        - Filter by status
+        - Filter by date_suspension
+        - Return the dataframe
+        """
         mask = (
             (df.status.str.lower().isin(SAV_STATUSES))
         )
@@ -224,7 +278,12 @@ class ManifestProcessor:
         return df[mask].reset_index(drop=True)
 
     def _filter_acquisition_status(self, df: pd.DataFrame, date_suspension: Union[datetime, str, None]) -> pd.DataFrame:
-        """Filter acquisition DataFrame by status conditions."""
+        """
+        Filter acquisition DataFrame by status conditions.
+        - Filter by status
+        - Filter by date_suspension
+        - Return the dataframe
+        """
         mask = (
             (df.status_commande.str.lower() == 'suspendue') &
             (df.status.str.lower().isin(ACQUISITION_STATUSES))
@@ -239,7 +298,10 @@ class ManifestProcessor:
         return df[mask].reset_index(drop=True)
 
     def _convert_date_columns(self, df: pd.DataFrame, date_columns: List[str]) -> pd.DataFrame:
-        """Convert date columns to datetime dtype."""
+        """
+        Convert date columns to datetime dtype.
+        Return the dataframe
+        """
         
         for col in date_columns:
             if col in df.columns:
@@ -267,7 +329,15 @@ class ManifestProcessor:
         return df
 
     def _extract_calls_metadata(self, df: pd.DataFrame) -> List[List[dict]]:
-        """Extract audio files from the manifest."""
+        """
+        Extract calls metadata from the manifest.
+        - Extract the client number
+        - Extract the date_commande
+        - Extract the date_suspension
+        - Get the calls based on the client number and date range
+        - Normalize the calls metadata
+        - Return the calls metadata
+        """
         calls_metadata = []
         for _, row in df.iterrows():
             client_number = row.client_number
@@ -276,7 +346,7 @@ class ManifestProcessor:
             
 
             # Logic for fetching calls
-            strategy = 'all' if row.status.lower() == 'client injoignable' else 'first'
+            strategy = 'all' if row.status.lower() == 'client injoignable' else 'last'
             
             calls = get_calls(self.db, client_number, date_commande, date_suspension, strategy=strategy)
             

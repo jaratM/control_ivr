@@ -1,3 +1,4 @@
+import os
 from typing import List, Dict
 from .types import AudioSegment, TranscriptionResult
 import time
@@ -11,7 +12,12 @@ class Transcriber:
         self.device = device
         self.config = config or {}
         
-        model_name = self.config.get('transcription_model', 'facebook/w2v-bert-2.0') # Fallback if not in config
+        # Look in processing config first, then fallback
+        processing_config = self.config.get('processing', {})
+        model_name = processing_config.get('transcription_model', 'facebook/w2v-bert-2.0')
+        
+        # Expand environment variables like $HOME
+        model_name = os.path.expandvars(os.path.expanduser(model_name))
         
         try:
             self.model = Wav2Vec2BertForCTC.from_pretrained(
@@ -25,10 +31,9 @@ class Transcriber:
             self.model.eval()
             
             # Optimization: Compile the model for faster inference (PyTorch 2.0+)
-            # We use 'reduce-overhead' which is great for inference loops
-            if hasattr(torch, 'compile'):
-                logger.info(f"Compiling model on {self.device}...")
-                self.model = torch.compile(self.model, mode="reduce-overhead")
+            # if hasattr(torch, 'compile'):
+            #     logger.info(f"Compiling model on {self.device}...")
+            #     self.model = torch.compile(self.model, mode="reduce-overhead")
             
         except Exception as e:
             logger.error(f"Failed to load model {model_name}: {e}")

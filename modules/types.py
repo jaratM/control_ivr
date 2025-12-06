@@ -33,8 +33,8 @@ class ClassificationInput:
 @dataclass
 class ClassificationResult:
     file_id: str
-    status: str # e.g., "compliant", "flagged"
-    behavior_tags: List[str]
+    status: str # e.g., "Silence", "Le client refuse l'installation"..
+    behavior: str # e.g., "Bien" or "Mauvais"
 
 @dataclass
 class ComplianceInput:

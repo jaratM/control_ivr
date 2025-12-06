@@ -1,6 +1,6 @@
 pipeline:
   num_ingestion_workers: 32
-  num_compliance_workers: 1
+  num_classification_workers: 1
   batch_size: 32
   batch_timeout_ms: 100
   max_queue_size: 1000
@@ -15,7 +15,6 @@ gpu:
   use_multi_gpu: true
   gpu_allocation:
     transcription: "all"  # or specific indices [0, 1]
-    classification: "share" # share with transcription or separate
 
 logging:
   level: "INFO"
@@ -56,15 +55,25 @@ csv_mappings:
 
 
   SAV:
-    Numéro: "numero_commande"
-    Date envoi IAM: "date_commande"  
-    Date suspension: "date_suspension"
-    Motif suspension: "status"
-    Catégorie: "categorie"
-    Date réouverture systeme: "date_reouverture_systeme"
-    Date recyclage: "date_recyclage"
-    Commentaire envoi IAM: "client_number"
-    Numéro chez l’opérateur d’infrastructure: "numero_operateur_infrastructure"
+    "Numéro": "numero_commande"
+    "ND": MDN
+    "Date envoi IAM": "date_commande"  
+    "Date suspension": "date_suspension"
+    "Motif suspension": "status"
+    "Catégorie": "categorie"
+    "Date réouverture systeme": "date_reouverture_systeme"
+    "Date recyclage": "date_recyclage"
+    "Commentaire envoi IAM": "client_number"
+    "Numéro chez l’opérateur d’infrastructure": "numero_operateur_infrastructure"
 
-branches:
-  
+branche:
+  SAV: 
+    ADSL: ADSL_SAV
+    VULA: FTTH_VULA_SAV
+  ACQUISITION:
+    ADSL: ADSL_INSTALL
+    VULA: FTTH_VULA_INSTALL
+
+
+classification:
+  prompt_file: "config/prompt.txt"

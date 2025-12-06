@@ -9,7 +9,7 @@ from .workers import ingestion_worker, batcher_worker, gpu_worker, assembler_wor
 from .utils import setup_logging
 # from modules.compliance import ComplianceVerifier, ComplianceInput
 from modules.compliance import ComplianceVerifier
-
+from datetime import datetime
 class PipelineOrchestrator:
     def __init__(self, config_path: str):
         with open(config_path, 'r') as f:
@@ -19,8 +19,16 @@ class PipelineOrchestrator:
         self.manager = multiprocessing.Manager()
         self.verifier = ComplianceVerifier()
         
-    def run(self, df: pd.DataFrame, calls_metadata: List, manifest_type: str):
-        logger.info("Starting Pipeline Orchestration")
+    def run(self, df: pd.DataFrame, calls_metadata: List, manifest_type: str, category: str, output_path: str):
+        """
+        Run the pipeline orchestration.
+        - Verify the compliance
+        - Add the calls to the path queue
+        - Start the workers
+        - Wait for the workers to finish
+        - Collect the results
+        """
+        logger.info(f"Starting Pipeline Orchestration for {manifest_type} {category}")
         
         # 1. Setup Queues
         path_queue = self.manager.Queue()
@@ -30,16 +38,18 @@ class PipelineOrchestrator:
         classification_queue = self.manager.Queue()
         result_queue = self.manager.Queue()
         
-        # 2. Discover Files
-        logger.info(f"Found {len(calls_metadata)} calls")
         
-        compliance_df = self.verifier.verify_compliance(df, calls_metadata, manifest_type)
-        compliance_df.to_csv(f"data/compliance_df{manifest_type}.csv", index=False)
+        compliance_df = self.verifier.verify_compliance(df, calls_metadata, category, manifest_type, self.config)
+        logger.info(f"Saving compliance dataframe to {output_path}/compliance_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        compliance_df.to_csv(f"{output_path}/compliance_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", index=False)
         
-        for call in calls_metadata:
-            if call and len(call) > 0:
-                path_queue.put(call[0])
+        logger.info(f"Adding {len([c for c in calls_metadata if c])} calls to path queue")
 
+        for call in [c for c in calls_metadata if c]:
+            path_queue.put(call[0])
+
+        assembler_output_file = f"{output_path}/assembler_output_{manifest_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        logger.info(f"Saving assembler output to {assembler_output_file}")
         # Poison pills for Ingestion Workers
         num_ingestion = self.config['pipeline']['num_ingestion_workers']
         for _ in range(num_ingestion):
@@ -50,16 +60,19 @@ class PipelineOrchestrator:
         gpu_procs = []
         class_procs = []
         
+        ingestion_output_file = f"{output_path}/ingestion_output_{manifest_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        logger.info(f"Saving ingestion output to {ingestion_output_file}")
         # Ingestion Workers
         for _ in range(num_ingestion):
             p = multiprocessing.Process(
                 target=ingestion_worker,
-                args=(path_queue, segment_queue, assembly_queue, self.config)
+                args=(path_queue, segment_queue, assembly_queue, self.config, ingestion_output_file)
             )
             p.start()
             ingestion_procs.append(p)
             
         # Batcher Worker
+        logger.info(f"Starting Batcher Worker")
         batcher = multiprocessing.Process(
             target=batcher_worker,
             args=(segment_queue, transcription_queue, self.config)
@@ -67,7 +80,7 @@ class PipelineOrchestrator:
         batcher.start()
         
         # GPU Workers
-        num_gpus = 2 if self.config['gpu']['use_multi_gpu'] else 0
+        num_gpus = 1 if self.config['gpu']['use_multi_gpu'] else 1
         gpu_worker_count = num_gpus if num_gpus > 0 else 1
         device_list = list(range(num_gpus)) if num_gpus > 0 else ["cpu"]
         
@@ -83,13 +96,13 @@ class PipelineOrchestrator:
         # Assembler Worker (Reassembles transcripts)
         assembler = multiprocessing.Process(
             target=assembler_worker,
-            args=(assembly_queue, classification_queue, self.config)
+            args=(assembly_queue, classification_queue, self.config, assembler_output_file)
         )
         assembler.start()
         
         # Classification Workers (AWS Bedrock - I/O Bound)
         # We can scale this higher than GPUs because it's just waiting on HTTP
-        num_classifiers = 8 
+        num_classifiers = self.config['pipeline'].get('num_classification_workers', 4)
         for _ in range(num_classifiers):
             p = multiprocessing.Process(
                 target=classification_worker,
@@ -133,6 +146,7 @@ class PipelineOrchestrator:
         results = []
         while not result_queue.empty():
             results.append(result_queue.get())
-            
+
+        compliance_df = self.verifier.verify_compliance_batch(compliance_df, calls_metadata, results, category, manifest_type, self.config)
         logger.info(f"Pipeline finished. Generated {len(results)} results.")
         return results

@@ -1,95 +1,132 @@
 from .types import ComplianceResult
 import pandas as pd
-from typing import List, Any, Dict
+from typing import List, Any, Dict, Optional
 from loguru import logger
-from database.models import Call
 from datetime import timedelta, datetime
 
 class ComplianceVerifier:
-    def verify_compliance(self, df: pd.DataFrame, calls_metadata: List[List[Any]], manifest_type: str) -> pd.DataFrame:
-        # Initialize lists to store results
-        # We will append to these lists and assign them to the DF at the end to avoid SettingWithCopyWarning
-        logger.info(f'dataframe shape: {df.shape}, calls_metadata shape: {len(calls_metadata)}')
-        dispatched_calls_list = []
-        branch_calls_list = []
-        compliance_list = []
-        comments_list = []
+    """
+    Compliance verifier.
+    - Verify the compliance of the calls
+    - Return the compliance result
+    """
+    # Constants
+    STATUS_CONFORM = 'Conform'
+    STATUS_NON_CONFORM = 'Non conforme'
+    CLIENT_UNREACHABLE = 'client injoignable'
+    MANIFEST_ACQUISITION = 'ACQUISITION'
+    MANIFEST_SAV = 'SAV'
+    MIN_ATTEMPTS = 3
+    MIN_GAP_SECONDS = 7200 # 2 hours
 
-        # Iterate through the DataFrame
-        for i, (_, row) in enumerate(df.iterrows()):
-            # Default values for current row
-            is_compliant = 'Conform'
-            is_dispatched = 'Conform'
-            is_branch_calls = 'Conform'
-            comment = ""
+    def _parse_start_time(self, call: Dict) -> datetime:
+        """Helper to parse start_time (handles both datetime objects and ISO strings from serialization)"""
+        st = call.get('start_time')
+        if st is None:
+            return datetime.min
+        if isinstance(st, datetime):
+            return st
+        if isinstance(st, str):
+            try:
+                return datetime.fromisoformat(st)
+            except ValueError:
+                return datetime.min
+        return datetime.min
 
-            calls = calls_metadata[i]
-            count = row.get('Nbr_tentatives_appel', 0)
-            status = row.get('status', '')
 
-            # Basic check: if no attempts recorded
-            if count == 0:
-                comment += "Aucun appel trouvé"
-                is_compliant = 'Non conforme'
-            
-            else:
-                # Helper to parse start_time (handles both datetime objects and ISO strings from serialization)
-                def parse_start_time(call: Dict) -> datetime:
-                    st = call.get('start_time')
-                    if st is None:
-                        return datetime.min
-                    if isinstance(st, datetime):
-                        return st
-                    if isinstance(st, str):
-                        return datetime.fromisoformat(st)
-                    return datetime.min
+    def _verify_row(self, row: pd.Series, calls: List[Any], category: str, manifest_type: str, config: dict) -> Dict[str, str]:
+        """Verify compliance for a single row"""
+        is_compliant = self.STATUS_CONFORM
+        is_dispatched = self.STATUS_CONFORM
+        is_branch_calls = self.STATUS_CONFORM
+        comments = []
 
-                # Sort calls by start time to ensure correct order for gap checks
-                sorted_calls = sorted(calls, key=parse_start_time)
+        count = row.get('Nbr_tentatives_appel', 0)
+        status = str(row.get('status', '')).strip()
+        if manifest_type == self.MANIFEST_SAV:
+            category = row.get('categorie', '')
 
-                # Common Check: Verify all calls belong to the correct branch/manifest_type
-                # This fixes the bug in the original code where 'i' was undefined in the else block
-                for call in sorted_calls:
-                    if manifest_type != call.get('branch'):
-                        is_compliant = 'Non conforme'
-                        is_branch_calls = 'Non conforme'
-                        comment += f" Branche non conforme, "
-                        break
-                
-                # Specific logic for 'client injoignable'
-                if status.lower() == 'client injoignable':
-                    # Check 1: Minimum number of attempts
-                    if count < 3:
-                        is_compliant = 'Non conforme'
-                        comment += " Moins de 3 appels trouvés, "
+        # 1. Basic check: if no attempts recorded
+        if count == 0:
+            comments.append("Aucun appel trouvé")
+            return {
+                'appels_dispatches': is_dispatched,
+                'appels_branch': is_branch_calls,
+                'compliance': self.STATUS_NON_CONFORM,
+                'commentaires': ", ".join(comments)
+            }
+
+        # Sort calls by start time
+        sorted_calls = sorted(calls, key=self._parse_start_time)
+
+        # 2. Branch Verification
+        target_branch = config.get('branche', {}).get(manifest_type, {}).get(category)
+        
+        if target_branch is None:
+             is_compliant = self.STATUS_NON_CONFORM
+             is_branch_calls = self.STATUS_NON_CONFORM
+             comments.append("Branche non conforme")
+        else:
+            for call in sorted_calls:
+                if call.get('branch') != target_branch:
+                    is_compliant = self.STATUS_NON_CONFORM
+                    is_branch_calls = self.STATUS_NON_CONFORM
+                    comments.append("Branche non conforme")
+                    break
+
+        # 3. Client Unreachable Logic
+        if status.lower() == self.CLIENT_UNREACHABLE:
+            # Check 3a: Minimum number of attempts
+            if count < self.MIN_ATTEMPTS:
+                is_compliant = self.STATUS_NON_CONFORM
+                comments.append(f"Moins de {self.MIN_ATTEMPTS} appels trouvés")
+
+            # Check 3b: Time gap between consecutive calls
+            if len(sorted_calls) >= 2:
+                for i in range(len(sorted_calls) - 1):
+                    t1 = self._parse_start_time(sorted_calls[i])
+                    t2 = self._parse_start_time(sorted_calls[i+1])
+                    diff = t2 - t1
                     
-                    # Check 2: Time gap between consecutive calls
-                    if len(sorted_calls) >= 2:
-                        dispatched = True
-                        for i in range(len(sorted_calls) - 1):
-                            t1 = parse_start_time(sorted_calls[i])
-                            t2 = parse_start_time(sorted_calls[i+1])
-                            diff = t2 - t1
-                            
-                            # 2 hours = 7200 seconds
-                            if diff.total_seconds() < 7200:
-                                is_dispatched = 'Non conforme'
-                                is_compliant = 'Non conforme'
-                                hours_diff = diff.total_seconds() / 3600
-                                if dispatched:
-                                    comment += f" Le temps entre les appels {i+1} et {i+2} est de {hours_diff:.2f} heures, moins de 2 heures"
-                                    dispatched = False
+                    if diff.total_seconds() < self.MIN_GAP_SECONDS:
+                        is_dispatched = self.STATUS_NON_CONFORM
+                        is_compliant = self.STATUS_NON_CONFORM
+                        hours_diff = diff.total_seconds() / 3600
+                        comments.append(f"Le temps entre les appels {i+1} et {i+2} est de {hours_diff:.2f} heures, moins de 2 heures")     
+                        break
 
-            # Store results for this row
-            dispatched_calls_list.append(is_dispatched)
-            branch_calls_list.append(is_branch_calls)
-            compliance_list.append(is_compliant)
-            comments_list.append(comment)
+        return {
+            'appels_dispatches': is_dispatched,
+            'appels_branch': is_branch_calls,
+            'compliance': is_compliant,
+            'commentaires': ", ".join(comments)
+        }
 
-        # Bulk assign columns to DataFrame
-        df['appels_dispatches'] = dispatched_calls_list
-        df['appels_branch'] = branch_calls_list
-        df['compliance'] = compliance_list
-        df['commentaires'] = comments_list
+    def verify_compliance(self, df: pd.DataFrame, calls_metadata: List[List[Any]], category: str, manifest_type: str, config: dict) -> pd.DataFrame:
+        """
+        Verify the compliance of the calls.
+        - Return the compliance dataframe   
+        """
+        logger.info(f'dataframe shape: {df.shape}, calls_metadata shape: {len(calls_metadata)}')
+        
+        results = []
+        for i, (_, row) in enumerate(df.iterrows()):
+            calls = calls_metadata[i] if i < len(calls_metadata) else []
+            result = self._verify_row(row, calls, category, manifest_type, config)
+            results.append(result)
+            
+        # Bulk assign columns
+        df['appels_dispatches'] = [r['appels_dispatches'] for r in results]
+        df['appels_branch'] = [r['appels_branch'] for r in results]
+        df['compliance'] = [r['compliance'] for r in results]
+        df['commentaires'] = [r['commentaires'] for r in results]
 
         return df
+
+    def verify_compliance_batch(self, df: pd.DataFrame, calls_metadata: List[List[Any]], results: List[Any], category: str, manifest_type: str, config: dict) -> pd.DataFrame:
+        """
+        Verify the compliance of the calls in batch.
+        - Bulk assign the compliance result to the dataframe
+        - Return the compliance dataframe
+        """
+        
