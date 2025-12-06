@@ -116,11 +116,10 @@ class ComplianceVerifier:
             results.append(result)
             
         # Bulk assign columns
-        df['appels_dispatches'] = [r['appels_dispatches'] for r in results]
+        df['Conformité Intervalle'] = [r['appels_dispatches'] for r in results]
         df['appels_branch'] = [r['appels_branch'] for r in results]
-        df['compliance'] = [r['compliance'] for r in results]
-        df['commentaires'] = [r['commentaires'] for r in results]
-
+        df['Conformite_IAM'] = [r['compliance'] for r in results]
+        df['Commentaires'] = [r['commentaires'] for r in results]
         return df
 
     def verify_compliance_batch(self, df: pd.DataFrame, calls_metadata: List[List[Any]], results: List[Any], category: str, manifest_type: str, config: dict) -> pd.DataFrame:
@@ -129,4 +128,35 @@ class ComplianceVerifier:
         - Bulk assign the compliance result to the dataframe
         - Return the compliance dataframe
         """
-        
+        # Map results by numero_commande for O(1) lookup
+        # results contains ComplianceInput objects
+        results_map = {res.numero_commande: res for res in results}
+
+        num_bips = []
+        classification = []
+        behavior = []
+
+        for _, row in df.iterrows():
+            numero_commande = row.get('numero_commande')
+            
+            if numero_commande in results_map:
+                res = results_map[numero_commande]
+                num_bips.append(res.beep_count)
+                
+                # res.classification is a dict based on workers.py implementation
+                cls_data = res.classification
+                if isinstance(cls_data, dict):
+                    classification.append(cls_data.get('status', ''))
+                    behavior.append(cls_data.get('behavior', ''))
+                else:
+                    classification.append('')
+                    behavior.append('')
+            else:
+                num_bips.append(0)
+                classification.append('')
+                behavior.append('')
+                
+        df['Nb_tonnalite'] = num_bips
+        df['Classification modele'] = classification
+        df['Qualite_communication'] = behavior
+        return df

@@ -6,8 +6,9 @@ from typing import List, Optional, Tuple, Union
 from sqlalchemy.orm import Session
 from loguru import logger
 from database.models import Call, Manifest, ManifestStatus
-from database.database_manager import get_calls
+from database.database_manager import get_calls, get_manifest
 import uuid
+from database.database_manager import update_manifest_status
 
 
 # Status filters for different manifest types
@@ -92,10 +93,14 @@ class ManifestProcessor:
         self.db = db_session
         self.config = config
 
-    def process_manifest(self, csv_path: str, processing_date: Optional[datetime] = None) -> Tuple[pd.DataFrame, List[dict]]:
+    def process_manifest(self, csv_path: str, processing_date: Optional[datetime] = None) -> Tuple[pd.DataFrame, List[dict], Manifest]:
         """Parse a CSV manifest and return processed DataFrame."""
         manifest_id = str(uuid.uuid4())
         filename = csv_path.split('/')[-1]
+        manifest_record = get_manifest(self.db, filename)
+        if manifest_record:
+            logger.info(f"Manifest {filename} already exists")
+            return pd.DataFrame(), [], None, None, None
 
         # Record manifest start
         manifest_record = Manifest(
@@ -124,13 +129,12 @@ class ManifestProcessor:
                 raise ValueError(f"Unsupported file type: {filename}")
     
             
-            return df, calls_metadata, manifest_type, category
+            return df, calls_metadata, manifest_type, category, manifest_record
 
         except Exception as e:
             logger.error(f"Error processing manifest {csv_path}: {e}")
-            manifest_record.status = ManifestStatus.FAILED
-            self.db.commit()
-            return pd.DataFrame(), [], None, None
+            update_manifest_status(self.db, manifest_record.id, ManifestStatus.FAILED)
+            return pd.DataFrame(), [], None, None, None
 
     def _parse_acquisition(self, csv_path: str, date_suspension: Optional[datetime], manifest_type: str) -> Tuple[pd.DataFrame, List[Call]]:
         """
@@ -150,7 +154,7 @@ class ManifestProcessor:
         df = self._read_df(csv_path)
         # Rename columns
         df = df.rename(columns=config_mapping)
-        logger.info(f"Initial rows: {len(df)}")
+        logger.info(f"Processing Acquisition: Initial rows: {len(df)}\n")
         # logger.info(f"Columns: {df.columns}")
         # Filter by status
         # Pre-convert date_suspension for filtering if it exists
@@ -158,7 +162,7 @@ class ManifestProcessor:
             df["date_suspension"] = pd.to_datetime(df["date_suspension"], errors='coerce')
 
         df = self._filter_acquisition_status(df, date_suspension)
-        logger.info(f"Rows after status filter: {len(df)}")
+        logger.info(f"Processing Acquisition: Rows after status filter: {len(df)}\n")
         
         # Deduplicate
         # Sort by client_number and then by date_suspension (newest/most recent last)
@@ -174,10 +178,10 @@ class ManifestProcessor:
         
         # Normalize phone numbers
         df["client_number"] = df["client_number"].astype(str).apply(normalize_phone_number)
-        logger.info(f"Rows with valid phone numbers: {len(df)}")
+        logger.info(f"Processing Acquisition: Rows with valid phone numbers: {len(df)}\n")
         
         calls_metadata = self._extract_calls_metadata(df)
-        logger.info(f"Calls found: {len([c for c in calls_metadata if c])}")
+        logger.info(f"Processing Acquisition: Calls found: {len([c for c in calls_metadata if c])}\n")
         
         # Only keep columns that exist in the dataframe
         available_columns = [col for col in config_mapping.values() if col in df.columns]
@@ -209,12 +213,12 @@ class ManifestProcessor:
             
         # Filter by suspension status
         df = self._filter_sav_status(df, date_suspension)
-        logger.info(f"Rows after SAV status filter: {len(df)}")
+        logger.info(f"Processing SAV: Rows after SAV status filter: {len(df)}\n")
         
         # Extract contact phone from comments
         df["client_number"] = df["client_number"].apply(extract_contact_phone)
         df = df.dropna(subset=["client_number"])
-        logger.info(f"Rows with valid extracted phone: {len(df)}")
+        logger.info(f"Processing SAV: Rows with valid extracted phone: {len(df)}\n")
         
         # Sort by client_number and then by date_suspension (newest/most recent last)
         df = df.sort_values(['client_number', 'date_suspension'], ascending=[False, False])
@@ -226,7 +230,7 @@ class ManifestProcessor:
         df = self._adjust_date_commande_from_recyclage(df, "SAV")
 
         calls_metadata = self._extract_calls_metadata(df)
-        logger.info(f"Calls found (SAV): {len([c for c in calls_metadata if c])}")
+        logger.info(f"Processing SAV: Calls found (SAV): {len([c for c in calls_metadata if c])}\n")
         
         # Only keep columns that exist in the dataframe
         available_columns = [col for col in self.config['csv_mappings']['SAV'].values() if col in df.columns]
@@ -343,12 +347,12 @@ class ManifestProcessor:
             client_number = row.client_number
             date_commande = row.date_commande
             date_suspension = row.date_suspension
-            
+            numero_commande = row.numero_commande
 
             # Logic for fetching calls
             strategy = 'all' if row.status.lower() == 'client injoignable' else 'last'
             
-            calls = get_calls(self.db, client_number, date_commande, date_suspension, strategy=strategy)
+            calls = get_calls(self.db, client_number, date_commande, date_suspension, numero_commande, strategy=strategy)
             
             if calls is None:
                 calls = []

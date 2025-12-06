@@ -106,6 +106,7 @@ def ingestion_worker(input_queue, segment_queue, assembly_queue, config, ingesti
                 assembly_queue.put({
                     "type": "FILE_INIT",
                     "file_id": file_id,
+                    "numero_commande": input_item.get('numero_commande'),
                     "metadata": metadata,
                     "beep_count": number_low_bips,
                     "total_segments": len(segments),
@@ -116,6 +117,7 @@ def ingestion_worker(input_queue, segment_queue, assembly_queue, config, ingesti
                 with open(ingestion_output_file, "a") as f:
                     f.write(json.dumps({
                         "file_id": file_id,
+                        "numero_commande": input_item.get('numero_commande'),
                         "high_beeps": number_high_beeps,
                         "low_beeps": number_low_bips,
                         "segments": len(segments)
@@ -144,9 +146,7 @@ def batcher_worker(segment_queue, transcription_queue, config):
     
     current_batch = []
     last_flush = time.time()
-    
-    logger.info("Batcher worker started")
-    
+        
     num_ingestion = config['pipeline']['num_ingestion_workers']
     stop_signals_received = 0
     
@@ -235,7 +235,8 @@ def assembler_worker(assembly_queue, classification_queue, config, assembler_out
                     "beep_count": msg["beep_count"],
                     "total_segments": msg["total_segments"],
                     "text_segments": {},
-                    "received_count": 0
+                    "received_count": 0,
+                    "numero_commande": msg.get("numero_commande")  # Store numero_commande
                 }
                 logger.info(f"FILE_INIT: {file_id} initiated at Assembler worker")
             elif msg_type == "SEGMENT_RESULT":
@@ -262,6 +263,7 @@ def assembler_worker(assembly_queue, classification_queue, config, assembler_out
                     
                     # Create Classification Input
                     class_input = ClassificationInput(
+                        numero_commande=store.get("numero_commande"),
                         file_id=file_id,
                         full_transcript=full_text,
                         metadata=store["metadata"],
@@ -295,7 +297,7 @@ def assembler_worker(assembly_queue, classification_queue, config, assembler_out
 def classification_worker(classification_queue, result_queue, config):
     # This worker calls AWS Bedrock (simulated)
     # It should be run in multiple threads/processes to handle I/O latency
-    classifier = Classifier(config=config) # API Client
+    # classifier = Classifier(config=config) # API Client
     
     logger.info("Classification worker started")
     
@@ -306,10 +308,16 @@ def classification_worker(classification_queue, result_queue, config):
                 break
                 
             # 1. Call AWS Bedrock (Simulated)
-            class_result = classifier.classify_full_text(input_data.full_transcript, input_data.file_id)
+            # class_result = classifier.classify_full_text(input_data.full_transcript, input_data.file_id)
+            class_result = {
+                "status": "Silence",
+                "behavior": "Bien",
+                "file_id": input_data.file_id
+            }
             
             # 2. Verify Compliance
             compliance_input = ComplianceInput(
+                numero_commande=input_data.numero_commande,
                 metadata=input_data.metadata,
                 beep_count=input_data.beep_count,
                 classification=class_result

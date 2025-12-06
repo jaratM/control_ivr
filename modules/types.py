@@ -25,6 +25,7 @@ class TranscriptionResult:
 
 @dataclass
 class ClassificationInput:
+    numero_commande: str
     file_id: str
     full_transcript: str
     metadata: AudioMetadata
@@ -38,6 +39,7 @@ class ClassificationResult:
 
 @dataclass
 class ComplianceInput:
+    numero_commande: str
     metadata: AudioMetadata
     beep_count: int
     classification: ClassificationResult

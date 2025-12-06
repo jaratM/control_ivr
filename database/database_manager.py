@@ -21,6 +21,7 @@ def get_calls(
     client_number: str, 
     start_date: datetime, 
     end_date: datetime, 
+    numero_commande: str,
     strategy: str = 'all'
 ) -> Union[List[Call], Optional[Call]]:
     """
@@ -45,6 +46,7 @@ def get_calls(
         return {
             "call_id": call.call_id,
             "client_number": call.client_number,
+            "numero_commande": numero_commande,
             "start_time": call.start_time.isoformat() if call.start_time else None,
             "s3_path_audio": call.s3_path_audio,
             "branch": call.branch,
@@ -83,6 +85,10 @@ def update_manifest_status(db: Session, manifest_id: str, status: ManifestStatus
         if processed_at:
             manifest.processed_at = processed_at
         db.commit()
+
+def get_manifest(db: Session, filename: str) -> Optional[Manifest]:
+    """Get a manifest by ID."""
+    return db.query(Manifest).filter(Manifest.filename == filename).first()
 
 def create_verification_result(db: Session, result_data: dict) -> VerificationResult:
     """Create a verification result."""

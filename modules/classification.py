@@ -71,13 +71,13 @@ class Classifier:
                 logger.info(f"[Classifier] Loaded prompt from {prompt_file}")
         except Exception as e:
             if self.log:
-                print(f"[Classifier] Warning: Could not load prompt.txt: {e}")
+                logger.warning(f"[Classifier] Warning: Could not load prompt.txt: {e}")
             self.system_prompt = None 
 
     def classify_full_text(self, full_text: str, file_id: str) -> Dict:
             """Classify call outcome."""
             if self.log:
-                print(f"\n[Classification] Processing...")
+                logger.info(f"\n[Classification] Processing...")
 
             if not full_text or len(full_text) < 5:
                 return self._make_result(0, 1, file_id)
@@ -87,19 +87,12 @@ class Classifier:
                 raw = self._call_llm(system_prompt, user_prompt)
                 call_type, tech_behavior, reasoning = self._parse_response(raw)
                 
-                if self.log:
-                    # --- UPDATE THIS PRINT ---
-                    behavior_label = self.TECHNICIAN_BEHAVIOR_MAP.get(tech_behavior, "Unknown")
-                    print(f"  Result: Call Type={call_type} ({self.CATEGORY_MAP.get(call_type, 'Unknown')}), Tech Behavior={tech_behavior} ({behavior_label})")
-                    # --- END UPDATE ---
-                    if reasoning:
-                        print(f"  Reasoning: {reasoning}")
-                
+                logger.info(f"Classification result: Call Type={call_type} ({self.CATEGORY_MAP.get(call_type, 'Unknown')}), Tech Behavior={tech_behavior} ({self.TECHNICIAN_BEHAVIOR_MAP.get(tech_behavior, 'Unknown')})")
                 return self._make_result(call_type, tech_behavior, file_id)
             
             except Exception as e:
                 if self.log:
-                    print(f"  ✗ Classification error: {str(e)}")
+                    logger.error(f"Classification error: {str(e)}")
                 # Default to (Other, Good Behavior) on error
                 return self._make_result(4, 1, file_id)
 
@@ -153,7 +146,7 @@ class Classifier:
                     raise
                 sleep_time = base_delay * (2 ** attempt)
                 if self.log:
-                    print(f"[Classifier] Throttled (attempt {attempt}/{max_attempts}), "
+                    logger.warning(f"[Classifier] Throttled (attempt {attempt}/{max_attempts}), "
                           f"sleeping {sleep_time:.0f}s…")
                 time.sleep(sleep_time)
 

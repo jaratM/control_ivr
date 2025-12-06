@@ -40,7 +40,7 @@ class PipelineOrchestrator:
         
         
         compliance_df = self.verifier.verify_compliance(df, calls_metadata, category, manifest_type, self.config)
-        logger.info(f"Saving compliance dataframe to {output_path}/compliance_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        logger.info(f"Saving compliance dataframe to {output_path}compliance_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
         compliance_df.to_csv(f"{output_path}/compliance_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", index=False)
         
         logger.info(f"Adding {len([c for c in calls_metadata if c])} calls to path queue")
@@ -48,7 +48,7 @@ class PipelineOrchestrator:
         for call in [c for c in calls_metadata if c]:
             path_queue.put(call[0])
 
-        assembler_output_file = f"{output_path}/assembler_output_{manifest_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        assembler_output_file = f"{output_path}assembler_output_{manifest_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         logger.info(f"Saving assembler output to {assembler_output_file}")
         # Poison pills for Ingestion Workers
         num_ingestion = self.config['pipeline']['num_ingestion_workers']
@@ -60,7 +60,7 @@ class PipelineOrchestrator:
         gpu_procs = []
         class_procs = []
         
-        ingestion_output_file = f"{output_path}/ingestion_output_{manifest_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        ingestion_output_file = f"{output_path}ingestion_output_{manifest_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         logger.info(f"Saving ingestion output to {ingestion_output_file}")
         # Ingestion Workers
         for _ in range(num_ingestion):
@@ -149,4 +149,15 @@ class PipelineOrchestrator:
 
         compliance_df = self.verifier.verify_compliance_batch(compliance_df, calls_metadata, results, category, manifest_type, self.config)
         logger.info(f"Pipeline finished. Generated {len(results)} results.")
-        return results
+        if manifest_type == "SAV":
+            columns = ["numero_commande","MDN","client_number","date_commande","date_suspension","categorie","Nbr_tentatives_appel",
+            "Conformité Intervalle","appels_branch","Nb_tonnalite","status", "Classification modele","Qualite_communication","Conformite_IAM", "Commentaires"]
+        else:
+            columns = ["numero_commande","client_number","date_commande","date_suspension","Nbr_tentatives_appel",
+            "Conformité Intervalle","appels_branch","Nb_tonnalite","status", "Classification modele","Qualite_communication","Conformite_IAM", "Commentaires"]
+
+        compliance_df = compliance_df[columns] 
+        compliance_df.to_csv(f"{output_path}/result_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", index=False)
+        logger.info(f"Saving compliance dataframe to {output_path}result_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        return True if results else None
+

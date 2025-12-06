@@ -68,9 +68,11 @@ class MinioStorage:
         except S3Error as e:
             logger.error(f"Error uploading {object_name}: {e}")
 
-    def download_file(self, object_name: str, file_path: str):
+    def download_file(self, object_name: str, file_path: str) -> bool:
         """Downloads a file to local path."""
         try:
             self.client.fget_object(bucket_name=self.bucket_name, object_name=object_name, file_path=file_path)
+            return True
         except S3Error as e:
             logger.error(f"Error downloading {object_name}: {e}")
+            return False
