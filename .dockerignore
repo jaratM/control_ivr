@@ -1,0 +1,53 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.cursor/
+
+# Logs and data
+logs/
+*.log
+output/
+minio_data/
+pg_data/
+
+# Singularity/Apptainer images
+*.sif
+*.def
+
+# Local config overrides
+.env
+.env.*
+
+# Tests
+tests/
+scripts/
+
+# CSV data files
+*.csv
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Documentation
+README.md
+

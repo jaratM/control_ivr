@@ -1,11 +1,33 @@
-torch>=2.0.0
-numpy
-pyyaml
-pydantic
-loguru
-librosa
-soundfile
-sqlalchemy
-psycopg2-binary
-minio
-pandas
+# ==========================================
+# Control IVR Pipeline - Requirements
+# ==========================================
+
+# ---- Deep Learning & ML Framework ----
+torch==2.5.1
+torchaudio==2.5.1
+transformers==4.43.3            # Wav2Vec2BertForCTC, Wav2Vec2BertProcessor
+
+# ---- Audio Processing ----
+librosa==0.10.2.post1           # Audio analysis, spectrogram, RMS
+soundfile==0.13.1               # Audio file I/O (sf.read/write)
+scipy==1.15.2                   # Signal processing (hilbert, butter, sosfilt, find_peaks)
+
+# ---- Data Processing ----
+numpy==1.26.4                   # Numerical arrays
+pandas==2.2.2                   # DataFrames for CSV/data manipulation
+
+# ---- Database ----
+SQLAlchemy==2.0.41              # ORM for database operations
+psycopg2-binary==2.9.10         # PostgreSQL driver
+
+# ---- Object Storage ----
+minio==7.2.16                   # MinIO S3-compatible storage client
+
+# ---- AWS / LLM Classification ----
+boto3==1.39.4                   # AWS SDK (Bedrock for Claude classification)
+botocore==1.39.4                # AWS SDK core (required by boto3)
+
+# ---- Configuration & Utilities ----
+PyYAML==6.0.2                   # YAML config file parsing
+python-dotenv==1.0.1            # Load environment variables from .env
+loguru==0.7.3                   # Structured logging

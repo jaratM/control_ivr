@@ -9,7 +9,7 @@ mkdir -p "$LOG_DIR" "$OUT_DIR"
 LOG_FILE="$LOG_DIR/run_${TS}.log"
 
 echo "[${TS}] Starting run" | tee -a "$LOG_FILE"
-python3 main.py --config config/config.yaml --date 19-11-2025  2>&1 | tee -a "$LOG_FILE"
+python3 main.py --config config/config.yaml --date 19-11-2025 --all 2>&1 | tee -a "$LOG_FILE"
 RC=${PIPESTATUS[0]}
 
 if [[ $RC -ne 0 ]]; then
