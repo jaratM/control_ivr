@@ -98,8 +98,8 @@ class ManifestProcessor:
         manifest_id = str(uuid.uuid4())
         filename = csv_path.split('/')[-1]
         manifest_record = get_manifest(self.db, filename)
-        if manifest_record:
-            logger.info(f"Manifest {filename} already exists")
+        if manifest_record and manifest_record.status == ManifestStatus.COMPLETED:
+            logger.info(f"Manifest {filename} already exists and is completed")
             return pd.DataFrame(), [], None, None, None
 
         # Record manifest start

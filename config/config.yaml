@@ -1,6 +1,6 @@
 pipeline:
   num_ingestion_workers: 32
-  num_classification_workers: 1
+  num_classification_workers: 8
   batch_size: 32
   batch_timeout_ms: 100
   max_queue_size: 1000
@@ -33,8 +33,13 @@ storage:
   secure: false
 
 database:
-  url: "postgresql://user:password@localhost:5433/compliance_db"
-
+  database_type: "postgresql"
+  db_host: "localhost"
+  db_port: 5433
+  db_name: "compliance_db"
+  db_user: "user"
+  db_password: "password"
+  
 csv_mappings:
   acquisition:
     ADSL:

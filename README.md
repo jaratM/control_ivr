@@ -9,7 +9,7 @@ A high-performance, multiprocessing-based audio processing pipeline for verifyin
 1. [Project Overview](#project-overview)
 2. [Architecture](#architecture)
 3. [Components Breakdown](#components-breakdown)
-4. [Technical Stack](#technical-stack)
+4. [Technical Stack](#technical-stack) 
 5. [Data Flow](#data-flow)
 6. [Configuration](#configuration)
 7. [Installation & Setup](#installation--setup)
@@ -731,7 +731,6 @@ export AWS_SESSION_TOKEN="your_session_token"  # Optional
 
 1. **Python 3.9+** with pip
 2. **CUDA 11.x+** and compatible NVIDIA drivers
-3. **Singularity** 3.x+ (for HPC environments)
 4. **PostgreSQL** 14+ (or container)
 5. **MinIO** (or container)
 
@@ -767,39 +766,6 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with AWS credentials
 ```
-
-### MinIO Setup
-
-1. **Start MinIO server**:
-```bash
-./scripts/start_minio.sh [PORT] [DATA_DIR]
-# Default: PORT=5058, DATA_DIR=./minio_data
-```
-
-2. **Upload audio data**:
-```bash
-python scripts/upload_data.py /path/to/audio/files --prefix "19-11-2025"
-```
-
-### Database Setup
-
-1. **Start PostgreSQL**:
-```bash
-./scripts/start_db.sh [PORT] [DATA_DIR]
-# Default: PORT=5433, DATA_DIR=./pg_data
-```
-
-2. **Initialize schema**:
-```bash
-python -c "from database.connection import init_db; init_db()"
-```
-
-3. **Ingest call index**:
-```bash
-python main.py --ingest-minio "19-11-2025"
-```
-
----
 
 ## Usage
 
@@ -1008,59 +974,14 @@ grep "Finished assembling" logs/run_*.log | wc -l
 
 # Track worker lifecycle
 grep -E "(started|exit|poison)" logs/run_*.log
-```
 
----
-
-## Future Improvements
-
-### Known Limitations
-
-1. **Single GPU default**: Current implementation uses one GPU by default
-2. **No checkpointing**: Failed runs must restart from beginning
-3. **Simulated classification**: AWS Bedrock calls are currently stubbed
-4. **Fixed chunking**: No adaptive audio segmentation
-5. **In-memory state**: Assembler state is not persisted
-
-### Planned Enhancements
-
-#### Short-term
-- [ ] Enable actual AWS Bedrock classification
-- [ ] Add progress bars and ETA estimates
-- [ ] Implement Redis-based state for assembler
-- [ ] Add health check endpoints
-
-#### Medium-term
-- [ ] Multi-GPU scaling with torch.distributed
-- [ ] Checkpointing and resume capability
-- [ ] Real-time monitoring dashboard
-- [ ] Webhook notifications for completion
-
-#### Long-term
-- [ ] Kubernetes deployment manifests
-- [ ] Auto-scaling based on queue depth
-- [ ] A/B testing framework for classification prompts
-- [ ] Streaming processing for real-time compliance
-
-### Scalability Roadmap
-
-| Scale | Configuration | Expected Throughput |
-|-------|---------------|---------------------|
-| Small | 8 ingest, 1 GPU, 4 class | ~100 calls/hour |
-| Medium | 32 ingest, 2 GPU, 8 class | ~500 calls/hour |
-| Large | 64 ingest, 4 GPU, 16 class | ~2000 calls/hour |
-
----
 
 ## License
 
-[Add license information here]
 
 ## Contributors
 
-[Add contributor information here]
 
 ## Support
 
-For questions or issues, please [add contact/issue tracker information].
 

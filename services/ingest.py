@@ -14,7 +14,7 @@ class IngestionService:
         """
         Scans the bucket for JSON metadata files and indexes them in the DB.
         """
-        logger.info(f"Starting ingestion for prefix: '{prefix}'")
+        # logger.info(f"Starting ingestion for prefix: '{prefix}'")
         
         # Iterate over all objects
         for object_name in self.minio.list_objects(prefix=prefix):
