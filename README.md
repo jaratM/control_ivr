@@ -658,10 +658,11 @@ processing:
   overlap_sec: 0.5              # Overlap between chunks
   transcription_model: "$HOME/path/to/model"
 
+ingestion:
+  input_folder: "/path/to/audio/folder"  # Audio folder to ingest (leave empty to skip)
+
 gpu:
   use_multi_gpu: true
-  gpu_allocation:
-    transcription: "all"        # or [0, 1] for specific GPUs
 
 logging:
   level: "INFO"
@@ -771,14 +772,14 @@ cp .env.example .env
 
 ### Running the Pipeline
 
-**Basic execution**:
+**Basic execution** (processes yesterday's manifests by default):
 ```bash
-python main.py --config config/config.yaml --date 19-11-2025
+python main.py --config config/config.yaml
 ```
 
-**Process all manifests**:
+**Filter manifests by prefix**:
 ```bash
-python main.py --config config/config.yaml --date 19-11-2025 --all
+python main.py --config config/config.yaml --prefix "SAV"
 ```
 
 **Using the cron wrapper**:
@@ -791,35 +792,42 @@ python main.py --config config/config.yaml --date 19-11-2025 --all
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
 | `--config` | str | `config/config.yaml` | Path to configuration file |
-| `--date` | str | `19-11-2025` | Processing date (DD-MM-YYYY) |
-| `--all` | flag | false | Process all manifests (not just first) |
-| `--ingest-minio` | str | "" | Ingest calls from specified prefix |
+| `--prefix` | str | `""` | Prefix to filter manifest files in Minio |
+
+> **Note**: The pipeline automatically processes **yesterday's date** and **all matching manifests**. Ingestion of audio files is controlled via the `ingestion.input_folder` setting in the config file.
+
+### Configuration-Based Ingestion
+
+Audio file ingestion is now controlled via the config file:
+
+```yaml
+# In config/config.yaml
+ingestion:
+  input_folder: "path/to/audio/folder"  # Set to ingest audio files, or leave empty to skip
+```
 
 ### Example Commands
 
 ```bash
-# Ingest new audio files
-python main.py --ingest-minio "20-11-2025"
+# Default run (processes yesterday's manifests)
+python main.py
 
-# Process single manifest for testing
-python main.py --date 20-11-2025
-
-# Full production run
-python main.py --date 20-11-2025 --all 2>&1 | tee logs/run.log
+# Filter by manifest prefix
+python main.py --prefix "SAV" 2>&1 | tee logs/run.log
 
 # With custom config
-python main.py --config /path/to/custom_config.yaml --date 20-11-2025 --all
+python main.py --config /path/to/custom_config.yaml --prefix "ACQUISITION"
 ```
 
 ### Expected Outputs
 
 ```
 output/
-└── 19-11-2025/
-    ├── compliance_df_SAV__20251206_175429.csv      # Initial compliance check
-    ├── result_df_SAV__20251206_175701.csv          # Final results with classifications
-    ├── assembler_output_SAV_20251206_175429.csv    # Transcription records
-    └── ingestion_output_SAV_20251206_175429.csv    # Ingestion metadata
+└── 2025-12-09/
+    ├── compliance_df_SAV__20251209_175429.csv      # Initial compliance check
+    ├── result_df_SAV__20251209_175701.csv          # Final results with classifications
+    ├── assembler_output_SAV_20251209_175429.csv    # Transcription records
+    └── ingestion_output_SAV_20251209_175429.csv    # Ingestion metadata
 ```
 
 **Output Columns (result_df)**:
@@ -949,16 +957,16 @@ logging:
   level: "DEBUG"
 ```
 
-2. **Test with single file**:
+2. **Test with prefix filter**:
 ```bash
-# Process only first manifest
-python main.py --date 19-11-2025  # without --all
+# Process only manifests matching a specific prefix
+python main.py --prefix "SAV"
 ```
 
 3. **Check intermediate outputs**:
 ```bash
-# Examine ingestion output
-cat output/19-11-2025/ingestion_output_*.csv | jq .
+# Examine ingestion output (date format: YYYY-MM-DD)
+cat output/2025-12-09/ingestion_output_*.csv | head
 ```
 
 4. **Monitor queue sizes** by adding logging to worker loops
