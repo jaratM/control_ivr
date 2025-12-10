@@ -18,7 +18,7 @@ class IngestionService:
         """
         for file_name in os.listdir(input_folder):
             file_path = os.path.join(input_folder, file_name)
-            if file_path.endswith('.json'):
+            if file_name.endswith('.json'):
                 self.process_json_file(file_path)
     
     def process_json_file(self, json_path: str):

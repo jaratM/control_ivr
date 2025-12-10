@@ -101,7 +101,7 @@ class ComplianceVerifier:
                     # Last call must be after 4pm (16:00) to be compliant
                     if date_commande.hour > 17 and call_time.hour > 17 and date_commande.date() == call_time.date():
                         is_compliant = self.STATUS_CONFORM
-                        comments.append("Dernier appel effectué apres 16h")
+                        comments.append("Dernier appel effectué apres 17h")
                     else:
                         is_compliant = self.STATUS_NON_CONFORM
                         comments.append(f"Moins de {self.MIN_ATTEMPTS} appels trouvés")
@@ -231,9 +231,16 @@ class ComplianceVerifier:
                 first_result = commande_results[0]
                 beep_count = getattr(first_result, 'beep_count', 0)
                 high_beeps = getattr(first_result, 'high_beeps', 0)
-                classification_data = getattr(first_result, 'classification', {}) or {}
-                classification_modele = classification_data.get('status', '')
-                behavior = classification_data.get('behavior', '')
+                classification_data = getattr(first_result, 'classification', None)
+                
+                # ClassificationResult is a dataclass, not a dict - access attributes directly
+                if classification_data:
+                    classification_modele = getattr(classification_data, 'status', '')
+                    behavior = getattr(classification_data, 'behavior', '')
+                else:
+                    classification_modele = ''
+                    behavior = ''
+                    
                 if classification_modele != current_motif:
                     is_compliant = self.STATUS_NON_CONFORM
                     commentaire += f"Classification non conforme: {classification_modele}"

@@ -118,7 +118,7 @@ class ManifestProcessor:
             
             # Convert DataFrame to list of dicts, default to empty list if df is None
             if df is not None:
-                df['manifest_id'] = manifest_record.id
+                df['manifest_id'] = manifest_record.filename
                 df_dict = df.to_dict(orient='records')
             else:
                 df_dict = []
@@ -220,7 +220,7 @@ class ManifestProcessor:
         df = df.drop_duplicates(subset='client_number', keep='first')
         
         # Convert date columns
-        df = self._convert_date_columns(df, SAV_RECYCLAGE_DATE_COLUMNS + ["date_commande ", "date_suspension"])
+        df = self._convert_date_columns(df, SAV_RECYCLAGE_DATE_COLUMNS + ["date_commande", "date_suspension"])
         df = self._adjust_date_commande_from_recyclage(df, "SAV")
 
         calls_metadata = self._extract_calls_metadata(df)
