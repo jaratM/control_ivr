@@ -237,8 +237,8 @@ def main():
     if input:
         run_ingestion(config, input_folder= input)
 
-    date = '2025-11-19'
-    # date = datetime.now() - timedelta(days=1)
+    # date = '2025-11-19'
+    date = datetime.now() - timedelta(days=1)
     date = date.strftime('%Y-%m-%d')
     process_manifests(config, args.config, date, prefix=args.prefix)
 
