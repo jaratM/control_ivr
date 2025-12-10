@@ -2,7 +2,7 @@ import os
 import argparse
 import tempfile
 from contextlib import contextmanager
-from typing import Optional
+from typing import Optional, List
 
 import yaml
 from loguru import logger
@@ -15,6 +15,10 @@ from services.manifest import ManifestProcessor
 from storage.minio_client import MinioStorage
 from datetime import datetime
 from pipeline.metrics import PipelineMetrics
+from database.database_manager import  get_manifest, update_manifest_status
+import uuid
+from database.models import Manifest
+from datetime import timedelta
 
 
 def load_config(config_path: str) -> dict:
@@ -49,11 +53,12 @@ def get_db_session():
         db.close()
 
 
-def fetch_manifest_files(minio: MinioStorage) -> list[str]:
+def fetch_manifest_files(minio: MinioStorage, target_date: str = "", prefix: str = "servicenow") -> List[str]:
     """Fetch manifest files from Minio storage."""
-    logger.info("=" * 20 + " Fetching manifest files from Minio " + "=" * 20 + "\n")
-    all_objects = minio.list_objects()
-    return [f for f in all_objects if f.endswith('.xlsx') or f.endswith('.csv')]
+    logger.info("=" * 20 + " Fetching manifest files from Minio for date: " + target_date + "=" * 20 + "\n")
+    suffix = f'{target_date}'.replace('-','')
+    all_objects = minio.list_objects(prefix=prefix)
+    return [f for f in all_objects if f.endswith(f'.xlsx') or f.endswith(f'{suffix}.csv')]
 
 
 def download_manifest(minio: MinioStorage, manifest_file: str, temp_dir: str) -> Optional[str]:
@@ -86,28 +91,49 @@ def process_single_manifest(
     logger.info(f"Processing manifest: {manifest_file}")
     metrics = PipelineMetrics(orchestrator.manager)
 
-    df, calls_metadata, base_manifest_type, category, manifest_record = processor.process_manifest(
-        local_path, target_date
+    manifest_id = str(uuid.uuid4())
+    filename = local_path.split('/')[-1]
+    suffix = f'{target_date}'.replace('-','')
+    manifest_record = get_manifest(db, filename)
+    if manifest_record: 
+        if manifest_record.status == ManifestStatus.COMPLETED:
+            logger.info(f"Manifest {filename} already exists and is completed")
+            return True
+        else:
+            manifest_record.status = ManifestStatus.PROCESSING
+            manifest_record.received_at = datetime.now()
+            db.add(manifest_record)
+            db.commit()
+        
+    else:
+        manifest_record = Manifest(
+                id=manifest_id,
+                filename=filename,
+                status=ManifestStatus.PROCESSING,
+                received_at=datetime.now()
+        )
+        db.add(manifest_record)
+        db.commit()
+        
+    df_dict, calls_metadata, base_manifest_type, category, manifest_record = processor.process_manifest(
+        local_path, target_date, manifest_record
     )
-    
-    if df.empty:
+
+    if len(df_dict) == 0:
         logger.warning(f"No data processed for {manifest_file}")
-        return False
+        update_manifest_status(db, manifest_record.id, ManifestStatus.FAILED)
+        return False        # No data processed
     
     logger.info(f"Manifest: {manifest_file} filtered and ready to be processed")
     
-    metrics = orchestrator.run(df, calls_metadata, base_manifest_type, category, output_base_dir, metrics)
+    metrics = orchestrator.run(df_dict, calls_metadata, base_manifest_type, category, output_base_dir, metrics, db)
     
     if not metrics:
         logger.error(f"Orchestration failed for {manifest_file}")
-        manifest_record.status = ManifestStatus.FAILED
-        manifest_record.processed_at = datetime.now()
-        db.commit()
+        update_manifest_status(db, manifest_record.id, ManifestStatus.FAILED)
         return False
     
-    manifest_record.status = ManifestStatus.COMPLETED
-    manifest_record.processed_at = datetime.now()
-    db.commit()
+    update_manifest_status(db, manifest_record.id, ManifestStatus.COMPLETED, processed_at=datetime.now())
     
     logger.info("=" * 48)
     logger.info(f"========== Orchestration completed for manifest: {manifest_file} ==========")
@@ -116,7 +142,7 @@ def process_single_manifest(
     return True
 
 
-def process_manifests(config: dict, config_path: str, target_date: str, process_all: bool = False):
+def process_manifests(config: dict, config_path: str, target_date: str, prefix: str = ""):
     """
     Main processing logic:
     1. Connect to Minio
@@ -132,7 +158,8 @@ def process_manifests(config: dict, config_path: str, target_date: str, process_
         return
 
     try:
-        manifest_files = fetch_manifest_files(minio)
+        
+        manifest_files = fetch_manifest_files(minio, target_date=target_date, prefix='servicenow')
     except Exception as e:
         logger.error(f"Error listing objects from Minio: {e}")
         return
@@ -166,22 +193,19 @@ def process_manifests(config: dict, config_path: str, target_date: str, process_
                 except Exception as e:
                     logger.error(f"Error processing {manifest_file}: {e}")
 
-                if not process_all:
-                    logger.info("Stopping after first manifest (use --all to process all).")
-                    break
 
-
-def run_ingestion(config: dict, ingest_minio: str):
+def run_ingestion(config: dict, input_folder: str = None):
     """Run ingestion of the Minio bucket and index the calls in the database."""
-    logger.info(f"Starting ingestion of the Minio bucket: {ingest_minio}")
+    logger.info(f"Starting ingestion of the input folder: {input_folder.split('/')[-1] if input_folder else ''}")
     
     minio = init_minio(config)
-    
     with get_db_session() as db:
         ingestion_service = IngestionService(db, minio)
-        ingestion_service.ingest_bucket(ingest_minio)
+
+        if input_folder:
+            ingestion_service.ingest_folder(input_folder)   
     
-    logger.info(f"Ingestion completed for the Minio bucket: {ingest_minio}")
+    logger.info(f"Ingestion completed for the input folder: {input_folder.split('/')[-1] if input_folder else ''}")
 
 
 def main():
@@ -192,38 +216,31 @@ def main():
         default="config/config.yaml",
         help="Path to configuration file"
     )
+    
     parser.add_argument(
-        "--date",
-        type=str,
-        default="19-11-2025",
-        help="Date string for processing (format: DD-MM-YYYY or YYYY-MM-DD)"
-    )
-    parser.add_argument(
-        "--all",
-        action="store_true",
-        help="Process all found manifests instead of just the first one"
-    )
-    parser.add_argument(
-        "--ingest-minio",
+        "--prefix",
         type=str,
         default="",
-        help="Ingest Minio bucket name (optional)"
+        help="Prefix to filter manifest files in Minio"
     )
+    
     args = parser.parse_args()
 
     config = load_config(args.config)
-    config['ingest_minio'] = args.ingest_minio
     
     try:
         init_db()
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
     
-    if args.ingest_minio:
-        run_ingestion(config, args.ingest_minio)
-    
-    process_manifests(config, args.config, args.date, process_all=args.all)
+    input = config['ingestion']['input_folder']
+    if input:
+        run_ingestion(config, input_folder= input)
 
+    date = '2025-11-19'
+    # date = datetime.now() - timedelta(days=1)
+    date = date.strftime('%Y-%m-%d')
+    process_manifests(config, args.config, date, prefix=args.prefix)
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,3 @@
-from telnetlib import STATUS
 from sqlalchemy import Column, String, DateTime, Integer, Boolean, ForeignKey, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship, declarative_base
@@ -45,8 +44,6 @@ class Call(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    verification_results = relationship("VerificationResult", back_populates="call", cascade="all, delete-orphan")
-    manifest_calls = relationship("ManifestCall", back_populates="call", cascade="all, delete-orphan")
 
 class Manifest(Base):
     __tablename__ = 'manifests'
@@ -61,24 +58,30 @@ class Manifest(Base):
 
 class ManifestCall(Base):
     __tablename__ = 'manifest_calls'
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    manifest_id = Column(String, ForeignKey('manifests.id'), nullable=False)
-    call_id = Column(String, ForeignKey('calls.call_id'), nullable=False)
-    status = Column(SQLEnum(ManifestCallStatus), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    numero_commande = Column(String, primary_key=True)
+    manifest_id = Column(String, ForeignKey('manifests.id', ondelete='CASCADE'), nullable=False)
+    # Relationship back to Manifest
     manifest = relationship("Manifest", back_populates="calls")
-    call = relationship("Call", back_populates="manifest_calls")
+    MDN = Column(String, nullable=True)
+    client_number = Column(String, nullable=True)
+    date_commande = Column(DateTime, nullable=True)
+    date_suspension = Column(DateTime, nullable=True)
+    categorie = Column(String, nullable=True)
+    nbr_tentatives_appel = Column(Integer, nullable=True)
+    conformite_intervalle = Column(String, nullable=True)
+    appels_branch = Column(String, nullable=True)
+    nb_tonnalite = Column(Integer, nullable=True)
+    beep_count = Column(Integer, nullable=True)
+    high_beeps = Column(Integer, nullable=True)
+    status = Column(String, nullable=True)
+    classification_modele = Column(String, nullable=True)
+    qualite_communication = Column(String, nullable=True)
+    conformite_IAM = Column(String, nullable=True)
+    commentaire = Column(String, nullable=True)
+    motif_suspension = Column(String, nullable=True)
+    processed = Column(Boolean, nullable=True)
+    compliance = Column(String, nullable=True)
 
-class VerificationResult(Base):
-    __tablename__ = 'verification_results'
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    call_id = Column(String, ForeignKey('calls.call_id'), nullable=False)
-    is_compliant = Column(Boolean, nullable=False)
-    issues = Column(JSONB, default=list)
-    details = Column(JSONB, default=dict)
-    processed_at = Column(DateTime, default=datetime.utcnow)
 
-    call = relationship("Call", back_populates="verification_results")
 

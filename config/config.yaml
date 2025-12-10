@@ -11,11 +11,12 @@ processing:
   overlap_sec: 0.5
   transcription_model: "$HOME/lustre/chatgpt_os-gtcy1ct0blo/shared/control-ivr/asr-control-ivr/w2v-bert-darija-finetuned-clean-ivr"
 
+ingestion:
+  input_folder: "/home/mohamed.jarat/lustre/chatgpt_os-gtcy1ct0blo/data/ingestion"
+  
 gpu:
   use_multi_gpu: true
-  gpu_allocation:
-    transcription: "all"  # or specific indices [0, 1]
-
+  
 logging:
   level: "INFO"
   file: "pipeline.log"
@@ -29,7 +30,7 @@ storage:
   endpoint: "localhost:5058"
   access_key: "admin"
   secret_key: "password123"
-  bucket_name: "calls-data"
+  bucket_name: "controle-ivr"
   secure: false
 
 database:
@@ -48,7 +49,7 @@ csv_mappings:
       date_commande: "date_commande"
       date_last_status: "date_suspension"
       numero_de_contact: "client_number"
-      statut_de_degroupage_iam: status
+      statut_de_degroupage_iam: motif_suspension
       statut_commande: status_commande
     VULA:
       inwib2c_order__c: numero_commande
@@ -56,7 +57,7 @@ csv_mappings:
       lastmodifieddate: "date_suspension"
       inwib2c_numerocontact__c: "client_number"
       inwib2c_statut_demande__c: "status_commande"
-      inwib2c_motif__c: "status"
+      inwib2c_motif__c: "motif_suspension"
 
 
   SAV:
@@ -64,7 +65,7 @@ csv_mappings:
     "ND": MDN
     "Date envoi IAM": "date_commande"  
     "Date suspension": "date_suspension"
-    "Motif suspension": "status"
+    "Motif suspension": "motif_suspension"
     "Catégorie": "categorie"
     "Date réouverture systeme": "date_reouverture_systeme"
     "Date recyclage": "date_recyclage"

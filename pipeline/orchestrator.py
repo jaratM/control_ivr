@@ -5,11 +5,15 @@ import time
 import pandas as pd
 from typing import List
 from loguru import logger
+from sqlalchemy.orm import Session
 from .workers import ingestion_worker, batcher_worker, gpu_worker, assembler_worker, classification_worker
 from .utils import setup_logging
 from .metrics import PipelineMetrics
 from modules.compliance import ComplianceVerifier
 from datetime import datetime
+from database.database_manager import get_manifest_call, bulk_upsert_manifest_calls
+import torch
+
 class PipelineOrchestrator:
     def __init__(self, config_path: str):
         with open(config_path, 'r') as f:
@@ -19,7 +23,7 @@ class PipelineOrchestrator:
         self.manager = multiprocessing.Manager()
         self.verifier = ComplianceVerifier()
         
-    def run(self, df: pd.DataFrame, calls_metadata: List, manifest_type: str, category: str, output_path: str, metrics: PipelineMetrics):
+    def run(self, df_dict: List[dict], calls_metadata: List, manifest_type: str, category: str, output_path: str, metrics: PipelineMetrics, db: Session):
         """
         Run the pipeline orchestration.
         - Verify the compliance
@@ -40,20 +44,27 @@ class PipelineOrchestrator:
         
         # Initialize metrics tracking
         
-        compliance_df = self.verifier.verify_compliance(df, calls_metadata, category, manifest_type, self.config)
-        logger.info(f"Saving compliance dataframe to {output_path}compliance_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-        compliance_df.to_csv(f"{output_path}/compliance_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", index=False)
+        df_dict = self.verifier.verify_compliance(df_dict, calls_metadata, category, manifest_type, self.config)
+        # compliance_df = pd.DataFrame(df_dict)
+        # logger.info(f"Saving compliance dataframe to {output_path}compliance_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        # compliance_df.to_csv(f"{output_path}/compliance_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", index=False)
         
         # Queue files and track count
-        valid_calls = [c for c in calls_metadata if c]
-        metrics.increment("files_queued", len(valid_calls))
-        logger.info(f"Adding {len(valid_calls)} calls to path queue")
 
-        for call in valid_calls:
-            path_queue.put(call[0])
-
-        assembler_output_file = f"{output_path}assembler_output_{manifest_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        logger.info(f"Saving assembler output to {assembler_output_file}")
+        counter = 0
+        for i,row in enumerate(df_dict):
+            manifest_call = get_manifest_call(db, row['numero_commande'])
+            processed = manifest_call.processed if manifest_call else False 
+            if processed:
+                logger.info(f"{row['numero_commande'] } already processed")
+            if len(calls_metadata[i]) > 0 and not processed:
+                for call in calls_metadata[i]:
+                    path_queue.put(call)
+                    counter += 1
+        
+        metrics.increment("files_queued", counter)
+        logger.info(f"Adding {counter} calls to path queue")
+        
         # Poison pills for Ingestion Workers
         num_ingestion = self.config['pipeline']['num_ingestion_workers']
         for _ in range(num_ingestion):
@@ -86,7 +97,9 @@ class PipelineOrchestrator:
         batcher.start()
         
         # GPU Workers
-        num_gpus = 1 if self.config['gpu']['use_multi_gpu'] else 1
+        if self.config['gpu']['use_multi_gpu']:
+            num_gpus = torch.cuda.device_count()
+
         gpu_worker_count = num_gpus if num_gpus > 0 else 1
         device_list = list(range(num_gpus)) if num_gpus > 0 else ["cpu"]
         
@@ -101,6 +114,8 @@ class PipelineOrchestrator:
             gpu_procs.append(p)
             
         # Assembler Worker (Reassembles transcripts)
+        assembler_output_file = f"{output_path}assembler_output_{manifest_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        logger.info(f"Saving assembler output to {assembler_output_file}")      
         assembler = multiprocessing.Process(
             target=assembler_worker,
             args=(assembly_queue, classification_queue, self.config, assembler_output_file, metrics),
@@ -156,19 +171,28 @@ class PipelineOrchestrator:
         while not result_queue.empty():
             results.append(result_queue.get())
 
-        compliance_df = self.verifier.verify_compliance_batch(compliance_df, calls_metadata, results, category, manifest_type, self.config)
+        compliance_list = self.verifier.verify_compliance_batch(df_dict, results)
         logger.info(f"Pipeline finished. Generated {len(results)} results.")
         
-        # Log comprehensive metrics summary
+        # Convert list of dicts to DataFrame for CSV export
+        compliance_df = pd.DataFrame(compliance_list)
         
-        if manifest_type == "SAV":
-            columns = ["numero_commande","MDN","client_number","date_commande","date_suspension","categorie","Nbr_tentatives_appel",
-            "Conformité Intervalle","appels_branch","Nb_tonnalite","status", "Classification modele","Qualite_communication","Conformite_IAM", "Commentaires"]
-        else:
-            columns = ["numero_commande","client_number","date_commande","date_suspension","Nbr_tentatives_appel",
-            "Conformité Intervalle","appels_branch","Nb_tonnalite","status", "Classification modele","Qualite_communication","Conformite_IAM", "Commentaires"]
+        # Log comprehensive metrics summary
+        # if manifest_type == "SAV":
+        #     columns = ["numero_commande","MDN","client_number","date_commande","date_suspension","categorie","Nbr_tentatives_appel",
+        #     "Conformité Intervalle","appels_branch","Nb_tonnalite","motif_suspension", "Classification modele","Qualite_communication","Conformite_IAM", "Commentaires"]
+        # else:
+        #     columns = ["numero_commande","client_number","date_commande","date_suspension","Nbr_tentatives_appel",
+        #     "Conformité Intervalle","appels_branch","Nb_tonnalite","motif_suspension", "Classification modele","Qualite_communication","Conformite_IAM", "Commentaires"]
 
-        compliance_df = compliance_df[columns] 
+        # # Filter to only include columns that exist in the DataFrame
+        # existing_columns = [col for col in columns if col in compliance_df.columns]
+        # compliance_df = compliance_df[existing_columns]
+        
+        # Bulk upsert all manifest calls (handles both new and existing records)
+        logger.info(f"Upserting {len(compliance_list)} manifest calls")
+        bulk_upsert_manifest_calls(db, compliance_list)
+            
         compliance_df.to_csv(f"{output_path}/result_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", index=False)
         logger.info(f"Saving compliance dataframe to {output_path}result_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
         return metrics

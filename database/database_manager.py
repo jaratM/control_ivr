@@ -2,7 +2,8 @@ from typing import List, Optional, Union
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, asc
-from .models import Call, Manifest, ManifestStatus, VerificationResult, IngestionStatus, ManifestCall, ManifestCallStatus
+from sqlalchemy.dialects.postgresql import insert
+from .models import Call, Manifest, ManifestStatus, IngestionStatus, ManifestCall, ManifestCallStatus
 
 def create_call(db: Session, call_data: dict) -> Call:
     """Create a new call record."""
@@ -90,20 +91,78 @@ def get_manifest(db: Session, filename: str) -> Optional[Manifest]:
     """Get a manifest by ID."""
     return db.query(Manifest).filter(Manifest.filename == filename).first()
 
-def create_verification_result(db: Session, result_data: dict) -> VerificationResult:
-    """Create a verification result."""
-    result = VerificationResult(**result_data)
-    db.add(result)
-    db.commit()
-    db.refresh(result)
-    return result
-
-def get_verification_results(db: Session, call_id: str) -> List[VerificationResult]:
-    """Get verification results for a call."""
-    return db.query(VerificationResult).filter(VerificationResult.call_id == call_id).all()
-
 def bulk_create_calls(db: Session, calls_data: List[dict]):
     """Bulk insert calls."""
     db.bulk_insert_mappings(Call, calls_data)
     db.commit()
 
+def create_manifest_call(db: Session, manifest_call_data: dict) -> ManifestCall:
+    """Create a new manifest call record."""
+    manifest_call = ManifestCall(**manifest_call_data)
+    db.add(manifest_call)
+    db.commit()
+    db.refresh(manifest_call)
+    return manifest_call
+
+def bulk_create_manifest_calls(db: Session, manifest_calls_data: List[dict]):
+    """Bulk insert manifest calls."""
+    db.bulk_insert_mappings(ManifestCall, manifest_calls_data)
+    db.commit()
+
+def bulk_update_manifest_calls(db: Session, manifest_calls_data: List[dict]):
+    """Bulk update manifest calls."""
+    db.bulk_update_mappings(ManifestCall, manifest_calls_data)
+    db.commit()
+
+def bulk_upsert_manifest_calls(db: Session, manifest_calls_data: List[dict]):
+    """Bulk upsert manifest calls (insert or update on conflict)."""
+    if not manifest_calls_data:
+        return 0
+
+    # Sanitize the data: ensure all values are proper Python types, not SQLAlchemy expressions
+    # and ensure all columns exist in each dictionary
+    sanitized_data = []
+    for record in manifest_calls_data:
+        sanitized_record = {}
+        for col in ManifestCall.__table__.columns:
+            col_name = col.name
+            value = record.get(col_name)
+            
+            # Convert pandas/numpy types to native Python types
+            if value is not None:
+                if hasattr(value, 'item'):  # numpy types have .item() method
+                    value = value.item()
+                elif col.type.python_type == int and not isinstance(value, int):
+                    try:
+                        value = int(value)
+                    except (ValueError, TypeError):
+                        value = None
+            
+            sanitized_record[col_name] = value
+        sanitized_data.append(sanitized_record)
+
+    # Create the insert statement
+    stmt = insert(ManifestCall).values(sanitized_data)
+    
+    # Define what to do on conflict (update all columns except the primary key and manifest_id)
+    # Get all column names from the model, excluding the primary key and manifest_id
+    update_dict = {
+        col.name: stmt.excluded[col.name] 
+        for col in ManifestCall.__table__.columns 
+        if not col.primary_key and col.name != 'manifest_id'
+    }
+    
+    # Add the on conflict clause
+    stmt = stmt.on_conflict_do_update(
+        index_elements=['numero_commande'],  # The constraint to check
+        set_=update_dict
+    )
+    
+    # Execute the statement
+    db.execute(stmt)
+    db.commit()
+    return len(manifest_calls_data)
+
+def get_manifest_call(db: Session, numero_commande: str) -> Optional[ManifestCall]:
+    """Get a manifest call by numero_commande."""
+    return db.query(ManifestCall).filter(ManifestCall.numero_commande == numero_commande).first()

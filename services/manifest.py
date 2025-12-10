@@ -1,3 +1,4 @@
+from fileinput import filename
 from unicodedata import category
 import pandas as pd
 import re
@@ -93,23 +94,10 @@ class ManifestProcessor:
         self.db = db_session
         self.config = config
 
-    def process_manifest(self, csv_path: str, processing_date: Optional[datetime] = None) -> Tuple[pd.DataFrame, List[dict], Manifest]:
-        """Parse a CSV manifest and return processed DataFrame."""
-        manifest_id = str(uuid.uuid4())
-        filename = csv_path.split('/')[-1]
-        manifest_record = get_manifest(self.db, filename)
-        if manifest_record and manifest_record.status == ManifestStatus.COMPLETED:
-            logger.info(f"Manifest {filename} already exists and is completed")
-            return pd.DataFrame(), [], None, None, None
-
+    def process_manifest(self, csv_path: str, processing_date: Optional[datetime] = None, manifest_record: Manifest = None) -> Tuple[List[dict], List[dict], Manifest]:
+        """Parse a CSV manifest and return processed DataFrame and calls metadata."""
         # Record manifest start
-        manifest_record = Manifest(
-            id=manifest_id,
-            filename=filename,
-            status=ManifestStatus.PROCESSING
-        )
-        self.db.add(manifest_record)
-        self.db.commit()
+        filename = csv_path.split('/')[-1]
 
         manifest_type = ''
         category = ''
@@ -127,14 +115,20 @@ class ManifestProcessor:
                 manifest_type = 'SAV'
             else:
                 raise ValueError(f"Unsupported file type: {filename}")
-    
             
-            return df, calls_metadata, manifest_type, category, manifest_record
+            # Convert DataFrame to list of dicts, default to empty list if df is None
+            if df is not None:
+                df['manifest_id'] = manifest_record.id
+                df_dict = df.to_dict(orient='records')
+            else:
+                df_dict = []
+                
+            return df_dict, calls_metadata, manifest_type, category, manifest_record
 
         except Exception as e:
             logger.error(f"Error processing manifest {csv_path}: {e}")
             update_manifest_status(self.db, manifest_record.id, ManifestStatus.FAILED)
-            return pd.DataFrame(), [], None, None, None
+            return [], [], None, None, None
 
     def _parse_acquisition(self, csv_path: str, date_suspension: Optional[datetime], manifest_type: str) -> Tuple[pd.DataFrame, List[Call]]:
         """
@@ -184,10 +178,10 @@ class ManifestProcessor:
         logger.info(f"Processing Acquisition: Calls found: {len([c for c in calls_metadata if c])}\n")
         
         # Only keep columns that exist in the dataframe
-        available_columns = [col for col in config_mapping.values() if col in df.columns]
+        available_columns = [col for col in config_mapping.values() if col in df.columns and col != "status_commande"]
         df = df[available_columns]
         
-        df['Nbr_tentatives_appel'] = [len(c) for c in calls_metadata]
+        df['nbr_tentatives_appel'] = [len(c) for c in calls_metadata]
         return df, calls_metadata
 
     def _parse_sav(self, csv_path: str, date_suspension: Optional[datetime]) -> Tuple[pd.DataFrame, List[Call]]:
@@ -233,10 +227,10 @@ class ManifestProcessor:
         logger.info(f"Processing SAV: Calls found (SAV): {len([c for c in calls_metadata if c])}\n")
         
         # Only keep columns that exist in the dataframe
-        available_columns = [col for col in self.config['csv_mappings']['SAV'].values() if col in df.columns]
+        available_columns = [col for col in self.config['csv_mappings']['SAV'].values() if col in df.columns and col != "date_recyclage"]
         df = df[available_columns]
         
-        df['Nbr_tentatives_appel'] = [len(c) for c in calls_metadata]
+        df['nbr_tentatives_appel'] = [len(c) for c in calls_metadata]
         return df, calls_metadata
 
     def _read_df(self, file_path: str) -> pd.DataFrame:
@@ -272,7 +266,7 @@ class ManifestProcessor:
         - Return the dataframe
         """
         mask = (
-            (df.status.str.lower().isin(SAV_STATUSES))
+            (df.motif_suspension.str.lower().isin(SAV_STATUSES))
         )
         if date_suspension:
             # Ensure date_suspension arg is datetime
@@ -290,7 +284,7 @@ class ManifestProcessor:
         """
         mask = (
             (df.status_commande.str.lower() == 'suspendue') &
-            (df.status.str.lower().isin(ACQUISITION_STATUSES))
+            (df.motif_suspension.str.lower().isin(ACQUISITION_STATUSES))
         )
         if date_suspension:
             # Ensure date_suspension arg is datetime
@@ -329,7 +323,7 @@ class ManifestProcessor:
                     return recyclage_date
             return row.date_commande 
         
-        df["date_commande "] = df.apply(find_best_recyclage_date, axis=1)
+        df["date_commande"] = df.apply(find_best_recyclage_date, axis=1)
         return df
 
     def _extract_calls_metadata(self, df: pd.DataFrame) -> List[List[dict]]:
@@ -350,7 +344,7 @@ class ManifestProcessor:
             numero_commande = row.numero_commande
 
             # Logic for fetching calls
-            strategy = 'all' if row.status.lower() == 'client injoignable' else 'last'
+            strategy = 'all' if row.motif_suspension.lower() == 'client injoignable' else 'last'
             
             calls = get_calls(self.db, client_number, date_commande, date_suspension, numero_commande, strategy=strategy)
             

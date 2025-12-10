@@ -7,8 +7,7 @@ class AudioMetadata:
     file_path: str
     file_id: str
     duration: float
-    sample_rate: int
-    created_at: str
+    start_time: str
 
 @dataclass
 class AudioSegment:
@@ -30,6 +29,7 @@ class ClassificationInput:
     full_transcript: str
     metadata: AudioMetadata
     beep_count: int
+    high_beeps: int
 
 @dataclass
 class ClassificationResult:
@@ -43,6 +43,7 @@ class ComplianceInput:
     metadata: AudioMetadata
     beep_count: int
     classification: ClassificationResult
+    high_beeps: int
 
 @dataclass
 class ComplianceResult:

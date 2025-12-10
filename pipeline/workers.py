@@ -1,7 +1,6 @@
 import time
 import queue
 import os
-import tempfile
 import multiprocessing
 
 from numpy import log10
@@ -9,10 +8,7 @@ import soundfile as sf
 from loguru import logger
 from modules.frequency import FrequencyAnalyzer
 from modules.transcription import Transcriber
-from modules.classification import Classifier
-from modules.compliance import ComplianceVerifier
-from modules.types import AudioSegment, ClassificationInput, ComplianceInput, AudioMetadata
-from storage.minio_client import MinioStorage
+from modules.types import  ClassificationInput, ComplianceInput, AudioMetadata
 import json
 import pandas as pd
 
@@ -21,7 +17,7 @@ def ingestion_worker(input_queue, segment_queue, assembly_queue, config, ingesti
     """
     Ingestion worker.
     - Get the input item from the input queue
-    - Download the audio file from the S3 bucket
+    - Read the audio file from local folder
     - Analyze the audio file
     - Notify the assembler (start of file)
     - Send the segments to the batcher
@@ -30,16 +26,6 @@ def ingestion_worker(input_queue, segment_queue, assembly_queue, config, ingesti
     freq_analyzer = FrequencyAnalyzer()
     worker_name = multiprocessing.current_process().name
     logger.info(f"[{worker_name}] Ingestion worker started")
-    
-    # Initialize Minio
-    minio_config = config.get('storage', {})
-    minio = MinioStorage(
-        endpoint=minio_config.get('endpoint'),
-        access_key=minio_config.get('access_key'),
-        secret_key=minio_config.get('secret_key'),
-        bucket_name=minio_config.get('bucket_name'),
-        secure=minio_config.get('secure', False)
-    )
     
     files_processed_local = 0
     files_failed_local = 0
@@ -53,72 +39,55 @@ def ingestion_worker(input_queue, segment_queue, assembly_queue, config, ingesti
                 break
 
             file_id = None
-            local_file_path = None
             file_start_time = time.time()
             
             try:
                 # Handle dictionary input (from ManifestProcessor)
                 if isinstance(input_item, dict):
                     call_id = input_item.get('call_id')
-                    s3_path = input_item.get('s3_path_audio')
+                    audio_path = input_item.get('s3_path_audio')  # Local file path
                     start_time = input_item.get('start_time')
                     file_id = call_id
                     
-                    if not s3_path:
-                        logger.error(f"No s3_path_audio for call {call_id}")
+                    if not audio_path:
+                        logger.error(f"No audio path for call {call_id}")
                         files_failed_local += 1
                         if metrics:
                             metrics.increment("files_failed")
-                            metrics.record_error("ingestion", call_id or "unknown", "No s3_path_audio")
+                            metrics.record_error("ingestion", call_id or "unknown", "No audio path")
+                        continue
+                    
+                    # Validate local file exists
+                    if not os.path.exists(audio_path):
+                        logger.error(f"Audio file not found: {audio_path}")
+                        files_failed_local += 1
+                        if metrics:
+                            metrics.increment("files_failed")
+                            metrics.record_error("ingestion", call_id or "unknown", f"File not found: {audio_path}")
                         continue
 
-                    # Download to temp file
-                    # Determine extension
-                    _, ext = os.path.splitext(s3_path)
-                    if not ext:
-                        ext = ".ogg" # Default
-                        
-                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp_file:
-                        local_file_path = tmp_file.name
-                    
-                    # Download using Minio client
-                    download_start = time.time()
-                    if not minio.download_file(s3_path, local_file_path):
-                        logger.error(f"Failed to download {s3_path}")
-                        files_failed_local += 1
-                        if metrics:
-                            metrics.increment("download_failed")
-                            metrics.increment("files_failed")
-                            metrics.record_error("download", file_id, f"Failed to download {s3_path}")
-                        continue
-                    
-                    download_duration = time.time() - download_start
                     if metrics:
-                        metrics.increment("files_downloaded")
-                    logger.debug(f"[{worker_name}] Downloaded {file_id} in {download_duration:.2f}s")
+                        metrics.increment("files_loaded")
                     
                     # Create Metadata
                     try:
-                        info = sf.info(local_file_path)
+                        info = sf.info(audio_path)
                         duration = info.duration
-                        sample_rate = info.samplerate
                     except Exception as e:
                         logger.warning(f"Could not get audio info with soundfile: {e}")
                         duration = 0.0
-                        sample_rate = 0
                     
                     metadata = AudioMetadata(
-                        file_path=s3_path,
+                        file_path=audio_path,
                         file_id=file_id,
                         duration=duration,
-                        sample_rate=sample_rate,
-                        created_at=str(start_time)
+                        start_time=start_time
                     )
                     
                 
                 # 2. Frequency Analysis
                 processing_config = config.get('processing', {})
-                number_high_beeps, number_low_bips, segments = freq_analyzer.process(local_file_path, file_id, processing_config)
+                number_high_beeps, number_low_bips, segments = freq_analyzer.process(audio_path, file_id, processing_config)
                 
                 
                 # 3. Notify Assembler (Start of file)
@@ -160,11 +129,6 @@ def ingestion_worker(input_queue, segment_queue, assembly_queue, config, ingesti
                 if metrics:
                     metrics.increment("files_failed")
                     metrics.record_error("ingestion", file_id or "unknown", str(e))
-            
-            finally:
-                # Cleanup temp file if we created one
-                if isinstance(input_item, dict) and local_file_path and os.path.exists(local_file_path):
-                    os.remove(local_file_path)
 
         except queue.Empty:
             continue
@@ -318,6 +282,7 @@ def assembler_worker(assembly_queue, classification_queue, config, assembler_out
                     "metadata": msg["metadata"],
                     "beep_count": msg["beep_count"],
                     "total_segments": msg["total_segments"],
+                    "high_beeps": msg["high_beeps"],
                     "text_segments": {},
                     "received_count": 0,
                     "numero_commande": msg.get("numero_commande"),
@@ -356,7 +321,8 @@ def assembler_worker(assembly_queue, classification_queue, config, assembler_out
                         file_id=file_id,
                         full_transcript=full_text,
                         metadata=store["metadata"],
-                        beep_count=store["beep_count"]
+                        beep_count=store["beep_count"],
+                        high_beeps=store["high_beeps"]
                     )
                  
                     try:
@@ -424,7 +390,8 @@ def classification_worker(classification_queue, result_queue, config, metrics=No
                 numero_commande=input_data.numero_commande,
                 metadata=input_data.metadata,
                 beep_count=input_data.beep_count,
-                classification=class_result
+                classification=class_result,
+                high_beeps=input_data.high_beeps
             )
             result_queue.put(compliance_input)
             
