@@ -12,17 +12,22 @@ from functools import lru_cache
 
 class FrequencyAnalyzer:
     """
-    Detects beeps in two separate frequency ranges independently.
-    Uses spectral analysis within each range to find dominant frequency.
-    Now supports different parameters for each frequency range.
-    High frequency beeps are only detected after the last low frequency beep.
-    Intelligently detects when ringing pattern ends for better transcription timing.
+    Dual frequency beep detector using bandpass filtering and envelope detection.
+    Detects beeps independently in low and high frequency ranges with optimized filtering.
+    Includes intelligent transcription start detection based on beep patterns and silence.
+    
+    Key Features:
+    - Low frequency detection (390-470 Hz): First 60 seconds only for efficiency
+    - High frequency detection (590-650 Hz): Entire audio
+    - Intelligent filtering: Last 5s window + after last low beep
+    - Transcription start detection: Lookahead for next beep + silence detection
+    - Adaptive thresholds: 60th percentile baseline with 1.5x multiplier
+    - Optimized envelope detection with Hilbert transform
     """
-
     
     def __init__(
         self,
-        low_freq_range: Tuple[float, float] = (390, 460),
+        low_freq_range: Tuple[float, float] = (390, 470),
         high_freq_range: Tuple[float, float] = (590, 650),
         low_params: Dict = None,
         high_params: Dict = None
@@ -33,15 +38,15 @@ class FrequencyAnalyzer:
         self.low_params = low_params or {
             'min_beep_interval': 1.0,
             'beep_duration': 1.0,
-            'detection_threshold': 0.50,
+            'detection_threshold': 0.30,
             'freq_bandwidth': 5
         }
         
         self.high_params = high_params or {
-            'min_beep_interval': 0.90,
-            'beep_duration': 0.50,
-            'detection_threshold': 0.50,
-            'freq_bandwidth': 5
+            'min_beep_interval': 0.30,
+            'beep_duration': 0.30,
+            'detection_threshold': 0.35,
+            'freq_bandwidth': 10
         }
 
     @lru_cache(maxsize=100)
@@ -132,46 +137,24 @@ class FrequencyAnalyzer:
         
     def detect_voicemail(self, audio_path: str) -> Dict:
         """
-        Main workflow:
-        1. Detect ALL low beeps (full audio)
-        2. Detect ALL high beeps (full audio)
-        3. Filter high beeps: keep only those AFTER last low beep
-        4. Find next beep start (lookahead)
-        5. Find silence after beep
-        6. Detect speech start
+        Optimized beep detection workflow:
+        1. Detect low frequency beeps (first 60 seconds only)
+        2. Detect high frequency beeps (entire audio)
+        3. Apply intelligent filtering (last 5s window + after last low beep)
+        4. Calculate transcription start with lookahead and silence detection
         """
         # Load audio
         y, sr = librosa.load(audio_path, sr=None, mono=True)
         duration = len(y) / sr
         
+        # Step 1: Detect low frequency beeps (first 60 seconds only for efficiency)
+        low_beeps = self._detect_low_freq_beeps(y, sr, duration)
         
-        # Step 1: Detect ALL low frequency beeps (no filtering)
-        low_beeps = self._detect_beeps_in_range(
-            y, sr, self.low_freq_range, "Low Freq", self.low_params
-        )
-            
-        # Step 2: Detect ALL high frequency beeps (no filtering yet)
-        high_beeps = self._detect_beeps_in_range(
-            y, sr, self.high_freq_range, "High Freq", self.high_params
-        )
+        # Step 2: Detect high frequency beeps (entire audio)
+        high_beeps = self._detect_high_freq_beeps(y, sr, duration)
         
-        # Step 3: Filter high beeps based on last low beep
-        if len(low_beeps['times']) > 0:
-            # Get last low beep time
-            last_low_time = low_beeps['times'][-1]
-            
-            # Keep only high beeps AFTER last low beep
-            filtered_high_times = [t for t in high_beeps['times'] if t > last_low_time]
-            
-            # Update high beeps results
-            high_beeps['times'] = filtered_high_times
-            high_beeps['count'] = len(filtered_high_times)
-            
-            
-        else:
-            high_beeps['times'] = []
-            high_beeps['count'] = 0
-        
+        # Step 3: Apply filtering logic to remove spurious high frequency beeps
+        self._apply_beep_filters(low_beeps, high_beeps, duration)
         
         # Initialize results
         results = {
@@ -186,57 +169,129 @@ class FrequencyAnalyzer:
             'speech_start': 0
         }
         
-        if len(low_beeps['times']) == 0:
+        if not low_beeps['times']:
             return results
         
-        # Step 4: Get last beep time
-        last_beep_time = low_beeps['times'][-1]
-        results['last_beep_time'] = last_beep_time
+        # Step 4: Calculate transcription start time
+        transcription_info = self._calculate_transcription_start(y, sr, low_beeps, high_beeps, duration)
         
-        # Get envelope for lookahead
-        envelope_data = self._get_envelope(y, sr, self.low_freq_range, self.low_params)
-        
-        # Step 5: Look ahead for next beep start
-        next_beep_start = self._lookahead_next_beep(
-            sr, last_beep_time, envelope_data, expected_interval=5.0
-        )
-        
-        if next_beep_start is not None:
-            results['next_beep_start'] = next_beep_start
-            search_start_time = next_beep_start
-        else:
-            search_start_time = last_beep_time
-        
-        # Step 6: Find silence in ORIGINAL signal after beep end
-        silence_start = self._find_silence_after_beep(y, sr, search_start_time)
-        results['beep_end_silence'] = silence_start
-        
-        # Step 7: Detect speech start in original signal
-        speech_start = silence_start
-        results['speech_start'] = speech_start
-
+        if transcription_info:
+            results['last_beep_time'] = transcription_info['last_beep_time']
+            results['next_beep_start'] = transcription_info.get('next_beep_start')
+            results['beep_end_silence'] = transcription_info['silence_time']
+            results['speech_start'] = transcription_info['speech_start']
+            
+            # Step 5: Filter high beeps before speech start
+            self._filter_high_beeps_before_speech(high_beeps, transcription_info)
         
         return results
+    
+    def _detect_low_freq_beeps(self, y: np.ndarray, sr: int, duration: float) -> Dict:
+        """Detect low frequency beeps in first 60 seconds only (optimized)."""
+        first_60s_window = 60.0
+        
+        if duration > first_60s_window:
+            start_sample = int(first_60s_window * sr)
+            y_segment = y[:start_sample]
+            
+            results = self._detect_beeps_in_range(
+                y_segment, sr, self.low_freq_range, "Low Freq", self.low_params
+            )
+            results['analysis_window'] = (0, first_60s_window)
+        else:
+            results = self._detect_beeps_in_range(
+                y, sr, self.low_freq_range, "Low Freq", self.low_params
+            )
+            results['analysis_window'] = (0, duration)
+        
+        return results
+    
+    def _detect_high_freq_beeps(self, y: np.ndarray, sr: int, duration: float) -> Dict:
+        """Detect high frequency beeps in entire audio."""
+        results = self._detect_beeps_in_range(
+            y, sr, self.high_freq_range, "High Freq", self.high_params
+        )
+        results['analysis_window'] = (0, duration)
+        return results
+    
+    def _apply_beep_filters(self, low_results: Dict, high_results: Dict, duration: float) -> None:
+        """Apply intelligent filtering to remove spurious high frequency beeps."""
+        last_5s_window = 5.0
+        original_high_count = high_results['count']
+        
+        # Filter 1: Keep only high beeps in last 5 seconds if audio is long
+        if duration > last_5s_window:
+            filtered_times = [t for t in high_results['times'] 
+                            if t > (duration - last_5s_window)]
+            
+            # If too many beeps removed (>3), clear all (likely false positives)
+            if original_high_count - len(filtered_times) > 3:
+                filtered_times = []
+            
+            high_results['times'] = filtered_times
+            high_results['count'] = len(filtered_times)
+        
+        # Filter 2: Keep only high beeps after last low beep
+        if low_results['times']:
+            last_low_time = low_results['times'][-1]
+            filtered_times = [t for t in high_results['times'] if t > last_low_time]
+            
+            high_results['times'] = filtered_times
+            high_results['count'] = len(filtered_times)
+    
+    def _filter_high_beeps_before_speech(self, high_results: Dict, 
+                                        transcription_info: Optional[Dict]) -> None:
+        """Filter high beeps occurring before transcription start."""
+        if not transcription_info or transcription_info.get('speech_start') is None:
+            return
+        
+        speech_start = transcription_info['speech_start']
+        filtered_times = [t for t in high_results['times'] if t >= speech_start]
+        high_results['times'] = filtered_times
+        high_results['count'] = len(filtered_times)
+    
+    def _calculate_transcription_start(self, y: np.ndarray, sr: int, 
+                                      low_results: Dict, high_results: Dict, 
+                                      duration: float) -> Optional[Dict]:
+        """Calculate transcription start time based on beep patterns and silence."""
+        if not low_results['times']:
+            return None
+        
+        last_beep_time = low_results['times'][-1]
+        
+        # Look ahead for next beep cycle
+        next_beep_start = self._lookahead_next_beep(y, sr, last_beep_time)
+        
+        if next_beep_start:
+            search_start = next_beep_start
+        else:
+            search_start = last_beep_time
+        
+        # Find silence after beep
+        silence_time = self._find_silence_after_beep(y, sr, search_start)
+        
+        return {
+            'last_beep_time': last_beep_time,
+            'next_beep_start': next_beep_start,
+            'silence_time': silence_time,
+            'speech_start': silence_time
+        }
 
     
     def _detect_beeps_in_range(self, y, sr, freq_range, label, params):
-        """
-        Detect beeps in a frequency range.
-        NO FILTERING - detects all beeps in the entire audio.
-        """
-        # Bandpass filter to frequency range
+        """Detect beeps within specific frequency range using optimized method."""
+        # Pre-filter to frequency range
         filtered = self._bandpass_filter(y, sr, freq_range[0], freq_range[1])
         
         # Find dominant frequency
         dominant_freq = self._find_dominant_frequency(filtered, sr, freq_range)
-        # print(f"  {label} ({freq_range[0]}-{freq_range[1]} Hz): Dominant = {dominant_freq:.1f} Hz")
         
-        # Narrow filter around dominant frequency
+        # Narrow bandpass filter around dominant frequency
         narrow_min = dominant_freq - params['freq_bandwidth']
         narrow_max = dominant_freq + params['freq_bandwidth']
         filtered_narrow = self._bandpass_filter(y, sr, narrow_min, narrow_max)
         
-        # Detect peaks using corrected method
+        # Detect peaks using optimized envelope method
         beep_times = self._detect_peaks(filtered_narrow, sr, params)
         
         return {
@@ -284,141 +339,139 @@ class FrequencyAnalyzer:
         }
 
     
-    def _lookahead_next_beep(
-        self,
-        sr: int,
-        last_beep_time: float,
-        envelope_data: Dict,
-        expected_interval: float = 4.5,
-        search_window: float = 1.5,
-        refractory: float = 0.35,           # ignore this much time after last beep
-        sustain_sec: float = 0.10,          # energy must stay high for this long
-        min_slope: float = 0.002,           # minimal rise per sample (norm units)
-        threshold_mult: float = 1.0         # × detection_threshold (aligns with new code)
-    ) -> Optional[float]:
-        env = envelope_data['envelope'] if 'envelope' in envelope_data else envelope_data['envelope_smooth']
-        audio_len = len(env)
-        audio_dur = audio_len / sr
-
-        # Compute window centered on expected next beep
+    def _lookahead_next_beep(self, y: np.ndarray, sr: int, last_beep_time: float,
+                            expected_interval: float = 5.0) -> Optional[float]:
+        """Look ahead for the start of the next beep cycle."""
+        # Prepare envelope
+        filtered = self._bandpass_filter(y, sr, *self.low_freq_range)
+        dominant_freq = self._find_dominant_frequency(filtered, sr, self.low_freq_range)
+        
+        narrow_min = dominant_freq - self.low_params['freq_bandwidth']
+        narrow_max = dominant_freq + self.low_params['freq_bandwidth']
+        filtered_narrow = self._bandpass_filter(y, sr, narrow_min, narrow_max)
+        
+        envelope = self._compute_normalized_envelope(filtered_narrow, sr)
+        if envelope is None:
+            return None
+        
+        # Define search window
+        audio_dur = len(envelope) / sr
         expected_next = last_beep_time + expected_interval
-        start = max(0.0, expected_next - search_window / 2)
+        search_window = 1.5
+        refractory = 0.35
+        
+        start = max(last_beep_time + refractory, expected_next - search_window / 2)
         end = min(audio_dur, expected_next + search_window / 2)
 
         if start >= audio_dur:
             return None
 
-        # Enforce refractory: don’t consider anything too close to last beep
+        # Enforce refractory: don't consider anything too close to last beep
         start = max(start, last_beep_time + refractory)
 
         s_idx = int(start * sr)
         e_idx = int(end * sr)
-        seg = env[s_idx:e_idx]
-        if seg.size == 0:
+        segment = envelope[s_idx:e_idx]
+        if segment.size == 0:
             return None
 
         # Threshold consistent with your newer detector
-        det_th = self.low_params['detection_threshold'] * threshold_mult
+        threshold = self.low_params['detection_threshold']
 
         # Require a TRUE rising edge (no "already above" at segment start)
-        above = seg > det_th
-        crossings = np.where(np.diff(above.astype(np.int8)) > 0)[0]
+        crossings = np.where(np.diff((segment > threshold).astype(np.int8)) > 0)[0]
         if crossings.size == 0:
             return None
-        rise_i = crossings[0]
+        rise_idx = crossings[0]
 
-        # Slope check: compare short window before/after the rise
-        win = max(2, int(0.02 * sr))  # 20 ms
-        pre_i0 = max(0, rise_i - win)
-        post_i1 = min(seg.size, rise_i + win)
-        slope = (np.mean(seg[rise_i:post_i1]) - np.mean(seg[pre_i0:rise_i])) / (post_i1 - pre_i0 + 1e-9)
-        if slope < min_slope:
-            return None
-
-        # Sustain check: must remain above threshold for sustain_sec
-        sustain_n = int(sustain_sec * sr)
-        if rise_i + sustain_n >= seg.size:
-            return None
-        if np.mean(seg[rise_i:rise_i + sustain_n]) < det_th:
+        # Validate with slope and sustain checks
+        if not self._validate_beep_onset(segment, rise_idx, sr, threshold):
             return None
         
-        next_beep_time = start + rise_i / sr
-
-        return next_beep_time
+        return start + rise_idx / sr
+    
+    def _validate_beep_onset(self, segment: np.ndarray, rise_idx: int, 
+                            sr: int, threshold: float) -> bool:
+        """Validate beep onset with slope and sustain checks."""
+        # Slope check
+        win = max(2, int(0.02 * sr))
+        pre_i0 = max(0, rise_idx - win)
+        post_i1 = min(segment.size, rise_idx + win)
+        slope = (np.mean(segment[rise_idx:post_i1]) - 
+                np.mean(segment[pre_i0:rise_idx])) / (post_i1 - pre_i0 + 1e-9)
+        
+        if slope < 0.002:
+            return False
+        
+        # Sustain check
+        sustain_n = int(0.10 * sr)
+        if rise_idx + sustain_n >= segment.size:
+            return False
+        
+        return np.mean(segment[rise_idx:rise_idx + sustain_n]) >= threshold
 
     
-    def _find_silence_after_beep(self, y, sr, search_start_time, silence_threshold_db=-40):
-        """
-        Find first sustained silence in ORIGINAL signal AFTER beep.
-        Searches FORWARD from search_start_time to find where silence begins.
-        """
-        # Convert to RMS for silence detection
-        frame_length = 512
-        hop_length = 128
+    def _find_silence_after_beep(self, y: np.ndarray, sr: int, search_start_time: float, 
+                                silence_threshold_db: float = -40) -> float:
+        """Find first sustained silence in audio after specified time."""
+        frame_length, hop_length = 512, 128
         
-        rms = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)[0]
-        times = librosa.frames_to_time(np.arange(len(rms)), sr=sr, hop_length=hop_length)
+        rms = librosa.feature.rms(y=y, frame_length=frame_length, 
+                                 hop_length=hop_length)[0]
+        times = librosa.frames_to_time(np.arange(len(rms)), sr=sr, 
+                                       hop_length=hop_length)
         
-        # Convert dB threshold to linear
-        silence_threshold_linear = 10 ** (silence_threshold_db / 20)
-        
-        # Start searching from search_start_time (FORWARD)
+        silence_threshold = 10 ** (silence_threshold_db / 20)  # -40 dB
         search_frame = int(search_start_time / (hop_length / sr))
         search_frame = max(0, min(search_frame, len(rms) - 1))
         
-        # Look forward for sustained silence (at least 100ms quiet)
-        min_silence_frames = int(0.1 / (hop_length / sr))
-        min_silence_frames = max(1, min_silence_frames)
+        # Look for sustained silence (at least 100ms)
+        min_silence_frames = max(1, int(0.1 / (hop_length / sr)))
         
-        # Search from current frame to end of audio
         for i in range(search_frame, len(rms) - min_silence_frames):
-            # Check if this frame and following frames are ALL silent
             window_end = min(i + min_silence_frames, len(rms))
-            if np.all(rms[i:window_end] < silence_threshold_linear):
+            if np.all(rms[i:window_end] < silence_threshold):
                 return times[i]
         
-        # If no silence found, return the end of audio time
         return times[-1] if len(times) > 0 else search_start_time
     
 
     
-    def _detect_peaks(self, y, sr, params):
-        """
-        Detect peaks in filtered signal.
-        FIXED: Now uses global normalization and consistent thresholds.
-        """
-        # Envelope detection
+    def _compute_normalized_envelope(self, y: np.ndarray, sr: int) -> Optional[np.ndarray]:
+        """Compute normalized envelope using Hilbert transform."""
         analytic = signal.hilbert(y)
         envelope = np.abs(analytic)
         
-        # Smooth with 50ms window (consistent with BeepDetector)
-        win_size = max(1, int(0.05 * sr))
-        kernel = np.ones(win_size) / win_size
+        # Smooth with 50ms window
+        window_size = max(1, int(0.05 * sr))
+        kernel = np.ones(window_size) / window_size
         envelope_smooth = np.convolve(envelope, kernel, mode='same')
         
-        # FIXED: Global normalization (done once, not per segment)
         if np.max(envelope_smooth) > 0:
-            envelope_smooth = envelope_smooth / np.max(envelope_smooth)
-        else:
+            return envelope_smooth / np.max(envelope_smooth)
+        return None
+    
+    def _detect_peaks(self, y: np.ndarray, sr: int, params: Dict) -> np.ndarray:
+        """Detect peaks using optimized envelope detection with adaptive thresholds."""
+        envelope_smooth = self._compute_normalized_envelope(y, sr)
+        
+        if envelope_smooth is None:
             return np.array([])
         
-        # FIXED: Use 60th percentile baseline (consistent with BeepDetector)
+        # Adaptive threshold using 60th percentile baseline
         baseline = np.percentile(envelope_smooth, 60)
-        
-        # FIXED: Use 1.5× multiplier (consistent with BeepDetector)
         threshold = max(params['detection_threshold'], baseline * 1.5)
         
-        # Find peaks
+        # Find peaks with range-specific parameters
         min_distance = int(params['min_beep_interval'] * sr)
         min_width = int(params['beep_duration'] * 0.5 * sr)
         
-        # FIXED: Use 0.05 prominence (consistent with BeepDetector)
         peaks, _ = find_peaks(
             envelope_smooth,
             height=threshold,
             distance=min_distance,
             width=min_width,
-            prominence=0.05  # Changed from 0.15
+            prominence=0.05
         )
         
         return peaks / sr

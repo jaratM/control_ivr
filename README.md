@@ -768,6 +768,77 @@ cp .env.example .env
 # Edit .env with AWS credentials
 ```
 
+### Docker Build
+
+The project includes a Dockerfile for containerized deployment with GPU support.
+
+#### Building the Docker Image
+
+```bash
+# Build the Docker image
+docker build -t control-ivr:latest .
+
+# Or with a specific tag
+docker build -t control-ivr:v1.0 .
+```
+
+#### Docker Image Details
+
+- **Base Image**: `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`
+- **GPU Support**: CUDA 12.4 with cuDNN 9
+- **Working Directory**: `/app`
+- **Volumes**: 
+  - `/app/output` - Pipeline output files
+  - `/app/logs` - Log files
+  - `/app/models` - ASR model storage
+  - `/app/input_folder` - Audio input folder (mapped from host)
+
+#### Running the Container
+
+```bash
+# Basic run with GPU support
+docker run --gpus all \
+  -v $(pwd)/output:/app/output \
+  -v $(pwd)/logs:/app/logs \
+  -v /path/to/models:/app/models \
+  -v /path/to/input_folder:/app/input_folder \
+  -v $(pwd)/config:/app/config \
+  control-ivr:latest
+
+# Run with custom config file
+docker run --gpus all \
+  -v $(pwd)/output:/app/output \
+  -v $(pwd)/logs:/app/logs \
+  -v /path/to/models:/app/models \
+  -v /path/to/input_folder:/app/input_folder \
+  -v $(pwd)/config:/app/config \
+  -e AWS_ACCESS_KEY_ID=your_key \
+  -e AWS_SECRET_ACCESS_KEY=your_secret \
+  control-ivr:latest python main.py --config /app/config/config.yaml --prefix "SAV"
+
+# Interactive shell for debugging
+docker run --gpus all -it --entrypoint /bin/bash \
+  -v $(pwd)/output:/app/output \
+  -v $(pwd)/logs:/app/logs \
+  -v /path/to/models:/app/models \
+  -v /path/to/input_folder:/app/input_folder \
+  -v $(pwd)/config:/app/config \
+  control-ivr:latest
+```
+
+#### Docker Requirements
+
+- **Docker** 20.10+ with GPU support
+- **NVIDIA Container Toolkit** installed and configured
+- **GPU** with CUDA 12.4+ compatible drivers
+
+#### Verifying GPU Access
+
+```bash
+# Check GPU availability in container
+docker run --gpus all --rm control-ivr:latest nvidia-smi
+```
+
 ## Usage
 
 ### Running the Pipeline

@@ -50,7 +50,7 @@ RUN chmod +x run_cron.sh
 # Create directories for output and logs
 RUN mkdir -p /app/output /app/logs /app/models
 
-VOLUME ["/app/output", "/app/logs", "/app/models"]
+VOLUME ["/app/output", "/app/logs", "/app/models", "/app/input_folder"]
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
