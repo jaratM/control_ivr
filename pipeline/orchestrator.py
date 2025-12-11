@@ -11,7 +11,7 @@ from .utils import setup_logging
 from .metrics import PipelineMetrics
 from modules.compliance import ComplianceVerifier
 from datetime import datetime
-from database.database_manager import get_manifest_call, bulk_upsert_manifest_calls
+from database.database_manager import get_manifest_call, bulk_insert_manifest_calls
 import torch
 
 class PipelineOrchestrator:
@@ -57,7 +57,8 @@ class PipelineOrchestrator:
             processed = manifest_call.processed if manifest_call else False 
             if processed:
                 logger.info(f"{row['numero_commande'] } already processed")
-            if len(calls_metadata[i]) > 0 and not processed:
+                continue
+            if len(calls_metadata[i]) > 0:
                 for call in calls_metadata[i]:
                     path_queue.put(call)
                     counter += 1
@@ -99,7 +100,6 @@ class PipelineOrchestrator:
         # GPU Workers
         if self.config['gpu']['use_multi_gpu']:
             num_gpus = torch.cuda.device_count()
-
         gpu_worker_count = num_gpus if num_gpus > 0 else 1
         device_list = list(range(num_gpus)) if num_gpus > 0 else ["cpu"]
         
@@ -177,6 +177,7 @@ class PipelineOrchestrator:
         # Convert list of dicts to DataFrame for CSV export
         compliance_df = pd.DataFrame(compliance_list)
         
+        logger.info(f"Compliance dataframe columns: {compliance_df.columns}")
         # Log comprehensive metrics summary
         # if manifest_type == "SAV":
         #     columns = ["numero_commande","MDN","client_number","date_commande","date_suspension","categorie","Nbr_tentatives_appel",
@@ -191,7 +192,7 @@ class PipelineOrchestrator:
         
         # Bulk upsert all manifest calls (handles both new and existing records)
         logger.info(f"Upserting {len(compliance_list)} manifest calls")
-        bulk_upsert_manifest_calls(db, compliance_list)
+        bulk_insert_manifest_calls(db, compliance_list)
             
         compliance_df.to_csv(f"{output_path}/result_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", index=False)
         logger.info(f"Saving compliance dataframe to {output_path}result_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")

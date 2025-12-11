@@ -103,11 +103,11 @@ class Classifier:
             if tech_behavior not in self.TECHNICIAN_BEHAVIOR_MAP:
                 tech_behavior = 1
                 
-            return {
-                "status": self.CATEGORY_MAP[call_type],
-                "behavior": self.TECHNICIAN_BEHAVIOR_MAP[tech_behavior], 
-                "file_id": file_id
-            }
+            return ClassificationResult(
+                status=self.CATEGORY_MAP[call_type],
+                behavior=self.TECHNICIAN_BEHAVIOR_MAP[tech_behavior], 
+                file_id=file_id
+            )
 
     def _build_prompts(self, text: str) -> Tuple[str, str]:
         # Use the system prompt loaded from prompt.txt

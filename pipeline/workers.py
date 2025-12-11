@@ -9,7 +9,7 @@ from loguru import logger
 from modules.frequency import FrequencyAnalyzer
 from modules.transcription import Transcriber
 from modules.classification import Classifier
-from modules.types import  ClassificationInput, ComplianceInput, AudioMetadata
+from modules.types import  ClassificationInput, ComplianceInput, AudioMetadata, ClassificationResult
 import json
 import pandas as pd
 
@@ -377,12 +377,12 @@ def classification_worker(classification_queue, result_queue, config, metrics=No
             classification_start = time.time()
                 
             # 1. Call AWS Bedrock (Simulated)
-            class_result = classifier.classify_full_text(input_data.full_transcript, input_data.file_id)
-            # class_result = {
-            #     "status": "Silence",
-            #     "behavior": "Bien",
-            #     "file_id": input_data.file_id
-            # }
+            # class_result = classifier.classify_full_text(input_data.full_transcript, input_data.file_id)
+            class_result = ClassificationResult(
+                status="Silence",
+                behavior="Bien",
+                file_id=input_data.file_id
+            )
             
             classification_duration = time.time() - classification_start
             

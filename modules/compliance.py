@@ -1,6 +1,6 @@
 from .types import  ComplianceInput
 import pandas as pd
-from typing import List, Any, Dict, Optional
+from typing import List, Any, Dict, Optional, Tuple
 from loguru import logger
 from datetime import timedelta, datetime
 from collections import defaultdict
@@ -18,6 +18,11 @@ class ComplianceVerifier:
     MANIFEST_SAV = 'SAV'
     MIN_ATTEMPTS = 3
     MIN_GAP_SECONDS = 7200 # 2 hours
+
+        # Default values for beep analysis
+    DEFAULT_BEEP_COUNT = 100
+    DEFAULT_HIGH_BEEPS = 100
+    MOTIF_INJOIGNABLE = 'injoignable'
 
     def _parse_start_time(self, call: Dict) -> datetime:
         """Helper to parse start_time (handles both datetime objects and ISO strings from serialization)"""
@@ -144,10 +149,209 @@ class ComplianceVerifier:
             df_dict[i].update(result)
         return df_dict
 
-    # Default values for beep analysis
-    DEFAULT_BEEP_COUNT = 100
-    DEFAULT_HIGH_BEEPS = 100
-    MOTIF_INJOIGNABLE = 'injoignable'
+
+
+    def _group_results_by_commande(
+        self, 
+        results: List[ComplianceInput]
+    ) -> Dict[str, List[ComplianceInput]]:
+        """
+        Group compliance results by numero_commande.
+        
+        Args:
+            results: List of ComplianceInput objects to group
+            
+        Returns:
+            Dictionary mapping numero_commande to list of ComplianceInput objects
+        """
+        results_by_commande: Dict[str, List[ComplianceInput]] = defaultdict(list)
+        for result in results:
+            results_by_commande[result.numero_commande].append(result)
+        return results_by_commande
+    
+    def _create_commande_lookup(
+        self, 
+        df_dict: List[dict]
+    ) -> Dict[str, dict]:
+        """
+        Create a lookup dictionary mapping numero_commande to row data.
+        
+        Args:
+            df_dict: List of dictionaries representing DataFrame rows
+            
+        Returns:
+            Dictionary mapping numero_commande to row dictionary
+        """
+        df_dict_by_commande: Dict[str, dict] = {}
+        for row in df_dict:
+            numero_commande = row.get('numero_commande')
+            if numero_commande:
+                df_dict_by_commande[numero_commande] = row
+        return df_dict_by_commande
+    
+    def _process_injoignable_commande(
+        self,
+        commande_results: List[ComplianceInput],
+        row_data: dict
+    ) -> Tuple[int, int, str, str, str, str]:
+        """
+        Process compliance verification for 'injoignable' motif cases.
+        
+        For injoignable cases, the method:
+        - Iterates through all results to find beep counts
+        - Checks if any result has 'silence' status with insufficient beeps (< 5 beeps and < 1 high beep)
+        - Verifies that all classifications match the 'injoignable' motif
+        
+        Args:
+            commande_results: List of ComplianceInput results for this commande
+            row_data: Dictionary containing the row data to update
+            
+        Returns:
+            Tuple of (beep_count, high_beeps, classification_modele, behavior, 
+                     is_compliant, commentaire)
+        """
+        is_compliant = row_data.get('conformite_IAM', self.STATUS_CONFORM)
+        commentaire = row_data.get('commentaire', '') or ''
+        beep_count = self.DEFAULT_BEEP_COUNT
+        high_beeps = self.DEFAULT_HIGH_BEEPS
+        classification_modele = self.MOTIF_INJOIGNABLE
+        behavior = ''
+        
+        for commande_res in commande_results:
+            high_beeps = commande_res.high_beeps
+            beep_count = commande_res.beep_count
+            
+            # Check for silence status with insufficient beeps
+            if commande_res.classification.status == 'silence':
+                if commande_res.beep_count < 5 and commande_res.high_beeps < 1:
+                    is_compliant = self.STATUS_NON_CONFORM
+                    commentaire += "Moins de 5 beeps trouvés. "
+                break
+            
+            # Verify classification matches injoignable motif
+            if commande_res.classification.status != self.MOTIF_INJOIGNABLE:
+                is_compliant = self.STATUS_NON_CONFORM
+                commentaire += f"Classification non conforme: {commande_res.classification.status}. "
+                classification_modele = commande_res.classification.status
+        
+        return beep_count, high_beeps, classification_modele, behavior, is_compliant, commentaire
+    
+    def _process_non_injoignable_commande(
+        self,
+        commande_results: List[ComplianceInput],
+        row_data: dict
+    ) -> Tuple[int, int, str, str, str, str]:
+        """
+        Process compliance verification for non-'injoignable' motif cases.
+        
+        For non-injoignable cases, the method:
+        - Uses values from the first result in the list
+        - Extracts beep_count, high_beeps, and classification data
+        - Compares the classification status with the current motif
+        - Marks as non-compliant if classification doesn't match expected motif
+        
+        Args:
+            commande_results: List of ComplianceInput results for this commande
+            row_data: Dictionary containing the row data to update
+            
+        Returns:
+            Tuple of (beep_count, high_beeps, classification_modele, behavior,
+                     is_compliant, commentaire)
+        """
+        is_compliant = row_data.get('conformite_IAM', self.STATUS_CONFORM)
+        commentaire = row_data.get('commentaire', '') or ''
+        current_motif = row_data.get('motif_suspension', '')
+        
+        # Use first result for non-injoignable cases
+        first_result = commande_results[0]
+        beep_count = getattr(first_result, 'beep_count', 0)
+        high_beeps = getattr(first_result, 'high_beeps', 0)
+        classification_data = getattr(first_result, 'classification', None)
+        
+        # Extract classification attributes
+        if classification_data:
+            classification_modele = getattr(classification_data, 'status', '')
+            behavior = getattr(classification_data, 'behavior', '')
+        else:
+            classification_modele = ''
+            behavior = ''
+        
+        # Verify classification matches expected motif
+        if classification_modele != current_motif:
+            is_compliant = self.STATUS_NON_CONFORM
+            commentaire += f"Classification non conforme: {classification_modele}. "
+        
+        return beep_count, high_beeps, classification_modele, behavior, is_compliant, commentaire
+    
+    def _update_row_with_compliance_data(
+        self,
+        row_data: dict,
+        beep_count: int,
+        high_beeps: int,
+        classification_modele: str,
+        behavior: str,
+        is_compliant: str,
+        commentaire: str
+    ) -> None:
+        """
+        Update row data dictionary with compliance verification results.
+        
+        Args:
+            row_data: Dictionary to update (modified in place)
+            beep_count: Number of beeps detected
+            high_beeps: Number of high-pitched beeps detected
+            classification_modele: Classification status from model
+            behavior: Quality of communication behavior
+            is_compliant: Compliance status (Conform/Non conforme)
+            commentaire: Compliance comments
+        """
+        row_data.update({
+            'nb_tonnalite': beep_count,
+            'high_beeps': high_beeps,
+            'classification_modele': classification_modele,
+            'qualite_communication': behavior,
+            'conformite_IAM': is_compliant,
+            'commentaire': commentaire.strip(),
+            'processed': True
+        })
+    
+    def _build_output_list(
+        self,
+        df_dict: List[dict],
+        df_dict_by_commande: Dict[str, dict]
+    ) -> List[dict]:
+        """
+        Build the final output list preserving original order from df_dict.
+        
+        Ensures all rows have proper types and default values for required fields.
+        Rows that were updated have their beep_count and high_beeps converted to int.
+        Rows without results get None values for beep fields.
+        
+        Args:
+            df_dict: Original list of row dictionaries (preserves order)
+            df_dict_by_commande: Dictionary of updated rows by numero_commande
+            
+        Returns:
+            List of dictionaries with compliance data, preserving original order
+        """
+        updated_df_list = []
+        for row in df_dict:
+            numero_commande = row.get('numero_commande')
+            if numero_commande and numero_commande in df_dict_by_commande:
+                # Use updated row with proper type conversions
+                updated_row = df_dict_by_commande[numero_commande]
+                updated_row['nb_tonnalite'] = int(updated_row['nb_tonnalite']) if updated_row.get('nb_tonnalite') is not None else None
+                updated_row['high_beeps'] = int(updated_row['high_beeps']) if updated_row.get('high_beeps') is not None else None
+                updated_df_list.append(updated_row)
+            else:
+                # Row without results - set defaults
+                row['nb_tonnalite'] = None
+                row['high_beeps'] = None
+                row['classification_modele'] = row.get('classification_modele', '')
+                row['qualite_communication'] = row.get('qualite_communication', '')
+                row['processed'] = False
+                updated_df_list.append(row)
+        return updated_df_list
 
     def verify_compliance_batch(
         self, 
@@ -155,124 +359,94 @@ class ComplianceVerifier:
         results: List[ComplianceInput]
     ) -> List[dict]:
         """
-        Verify the compliance of the calls in batch.
+        Verify compliance for a batch of commandes by merging classification results with original data.
         
-        Logic:
-        - Group results by numero_commande
-        - For each numero_commande with results:
-            - If motif_suspension == 'injoignable': find minimum beep_count and 
-              check if any result has a different motif_suspension
-            - Otherwise: use the first result's values
-        - Return the updated list of dicts with compliance info
+        This method processes compliance verification results from audio classification and merges them
+        with the original DataFrame rows. It handles two distinct cases based on the 'motif_suspension'
+        field:
+        
+        1. **Injoignable Cases** (motif_suspension == 'injoignable'):
+           - Iterates through all results for the commande
+           - Checks for 'silence' status with insufficient beeps (< 5 beeps AND < 1 high beep)
+           - Verifies all classifications match the 'injoignable' motif
+           - Marks as non-compliant if any result has a different classification status
+        
+        2. **Non-Injoignable Cases** (all other motifs):
+           - Uses the first result in the list for beep counts and classification
+           - Extracts classification status and behavior from the first result
+           - Compares classification status with the expected motif_suspension
+           - Marks as non-compliant if classification doesn't match expected motif
+        
+        The method preserves the original order of rows in df_dict and ensures all rows have
+        proper default values for required fields (beep_count, high_beeps, classification_modele,
+        qualite_communication).
         
         Args:
-            df_dict: List of dictionaries representing rows
-            results: List of result objects with numero_commande, beep_count, motif_suspension
-            category: Category for compliance check (currently unused)
-            manifest_type: Type of manifest (currently unused)
-            config: Configuration dict (currently unused)
+            df_dict: List of dictionaries representing DataFrame rows. Each dictionary should contain:
+                    - 'numero_commande': Order number (str, required for matching)
+                    - 'motif_suspension': Suspension reason (str, determines processing logic)
+                    - 'conformite_IAM': Initial compliance status (str, may be updated)
+                    - 'commentaire': Initial comments (str, may be appended to)
+                    Other fields may be present and will be preserved.
             
-        Returns:
-            List[dict]: Updated list with compliance fields added
-        """
-        # Group results by numero_commande
-        results_by_commande: Dict[str, List[Any]] = defaultdict(list)
-        for result in results:
-            numero_commande = result.numero_commande
-            results_by_commande[numero_commande].append(result)
+            results: List of ComplianceInput objects containing:
+                    - numero_commande: Order number for matching with df_dict rows
+                    - beep_count: Number of beeps detected in audio
+                    - high_beeps: Number of high-pitched beeps detected
+                    - classification: ClassificationResult with status and behavior
+                    Multiple results may exist for the same numero_commande.
         
+        Returns:
+            List of dictionaries with updated compliance data. Each dictionary includes:
+            - All original fields from df_dict
+            - 'beep_count': Number of beeps (int or None)
+            - 'high_beeps': Number of high beeps (int or None)
+            - 'classification_modele': Classification status from model (str)
+            - 'qualite_communication': Communication quality behavior (str)
+            - 'conformite_IAM': Updated compliance status (str: 'Conform' or 'Non conforme')
+            - 'commentaire': Updated comments with compliance issues (str)
+            
+            The list preserves the original order from df_dict. Rows without matching results
+            in the results list will have None values for beep_count and high_beeps.
+        
+        Side Effects:
+            - Logs processing statistics (number of unique commandes, completion status)
+            - Logs warnings for commandes that are skipped (no results or not found in df_dict)
+        
+        
+        """
+        # Group results by numero_commande for efficient lookup
+        results_by_commande = self._group_results_by_commande(results)
         logger.info(f'Processing {len(results_by_commande)} unique commandes from {len(results)} total results')
         
-        # Create lookup for df_dict rows by numero_commande
-        df_dict_by_commande: Dict[str, dict] = {}
-        for row in df_dict:
-            numero_commande = row.get('numero_commande')
-            if numero_commande:
-                df_dict_by_commande[numero_commande] = row
+        # Create lookup dictionary for df_dict rows
+        df_dict_by_commande = self._create_commande_lookup(df_dict)
         
         # Process each numero_commande that has results
         for numero_commande, commande_results in results_by_commande.items():
-            # Skip if no results or if numero_commande not in our lookup
+            # Skip if no results or numero_commande not found in lookup
             if not commande_results or numero_commande not in df_dict_by_commande:
                 logger.warning(f'Skipping numero_commande {numero_commande}: no results or not found in df_dict')
                 continue
             
             row_data = df_dict_by_commande[numero_commande]
-            is_compliant = row_data.get('conformite_IAM')
-            commentaire = row_data.get('commentaire') or ''
             current_motif = row_data.get('motif_suspension')
             
-            # Initialize with defaults
-            beep_count = self.DEFAULT_BEEP_COUNT
-            high_beeps = self.DEFAULT_HIGH_BEEPS
-            classification_modele = ''
-            behavior = ''
-            
+            # Process based on motif type
             if current_motif == self.MOTIF_INJOIGNABLE:
-                # For 'injoignable' cases: find minimum beep_count 
-                # and check if any result has a different motif
-                for commande_res in commande_results:
-                    high_beeps = commande_res.high_beeps
-                    beep_count = commande_res.beep_count
-                    
-                    if commande_res.classification.status == 'silence' :
-                        if commande_res.beep_count < 5 and commande_res.high_beeps < 1:
-                            is_compliant = self.STATUS_NON_CONFORM
-                            commentaire += f"Moins de 5 beeps trouvés)"
-                        break
-
-                    if commande_res.classification.status != self.MOTIF_INJOIGNABLE:
-                        is_compliant = self.STATUS_NON_CONFORM
-                        commentaire += f"Classification non conforme: {commande_res.classification.status}"
-
-
+                beep_count, high_beeps, classification_modele, behavior, is_compliant, commentaire = \
+                    self._process_injoignable_commande(commande_results, row_data)
             else:
-                # For non-'injoignable' cases: use values from the first result
-                first_result = commande_results[0]
-                beep_count = getattr(first_result, 'beep_count', 0)
-                high_beeps = getattr(first_result, 'high_beeps', 0)
-                classification_data = getattr(first_result, 'classification', None)
-                
-                # ClassificationResult is a dataclass, not a dict - access attributes directly
-                if classification_data:
-                    classification_modele = getattr(classification_data, 'status', '')
-                    behavior = getattr(classification_data, 'behavior', '')
-                else:
-                    classification_modele = ''
-                    behavior = ''
-                    
-                if classification_modele != current_motif:
-                    is_compliant = self.STATUS_NON_CONFORM
-                    commentaire += f"Classification non conforme: {classification_modele}"
+                beep_count, high_beeps, classification_modele, behavior, is_compliant, commentaire = \
+                    self._process_non_injoignable_commande(commande_results, row_data)
             
-            # Update the row with computed values
-            row_data.update({
-                'beep_count': beep_count,
-                'high_beeps': high_beeps,
-                'classification_modele': 'silence' if current_motif == self.MOTIF_INJOIGNABLE else classification_modele,
-                'qualite_communication': behavior,
-                'conformite_IAM': is_compliant,
-                'commentaire': commentaire
-            })
-           
-
-        # Convert df_dict_by_commande back to list preserving original order
-        updated_df_list = []
-        for row in df_dict:
-            numero_commande = row.get('numero_commande')
-            if numero_commande and numero_commande in df_dict_by_commande:
-                # Ensure proper Python types for the updated row
-                updated_row = df_dict_by_commande[numero_commande]
-                updated_row['beep_count'] = int(updated_row['beep_count']) if updated_row.get('beep_count') is not None else None
-                updated_row['high_beeps'] = int(updated_row['high_beeps']) if updated_row.get('high_beeps') is not None else None
-                updated_df_list.append(updated_row)
-            else:
-                # Ensure rows without results have proper default values for required fields
-                row['beep_count'] = None
-                row['high_beeps'] = None
-                row['classification_modele'] = row.get('classification_modele', '')
-                row['qualite_communication'] = row.get('qualite_communication', '')
-                updated_df_list.append(row)
-                
+            # Update row with computed compliance data
+            self._update_row_with_compliance_data(
+                row_data, beep_count, high_beeps, classification_modele,
+                behavior, is_compliant, commentaire
+            )
+        
+        # Build final output list preserving original order
+        updated_df_list = self._build_output_list(df_dict, df_dict_by_commande)
         logger.info(f'Compliance verification completed for {len(updated_df_list)} commandes')
         return updated_df_list

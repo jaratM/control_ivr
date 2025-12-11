@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, asc
 from sqlalchemy.dialects.postgresql import insert
 from .models import Call, Manifest, ManifestStatus, IngestionStatus, ManifestCall, ManifestCallStatus
+from loguru import logger
 
 def create_call(db: Session, call_data: dict) -> Call:
     """Create a new call record."""
@@ -113,55 +114,36 @@ def bulk_update_manifest_calls(db: Session, manifest_calls_data: List[dict]):
     """Bulk update manifest calls."""
     db.bulk_update_mappings(ManifestCall, manifest_calls_data)
     db.commit()
-
-def bulk_upsert_manifest_calls(db: Session, manifest_calls_data: List[dict]):
-    """Bulk upsert manifest calls (insert or update on conflict)."""
+    
+def bulk_insert_manifest_calls(db: Session, manifest_calls_data: List[dict]):
+    """Bulk insert manifest calls."""
+    
     if not manifest_calls_data:
-        return 0
+        return
 
-    # Sanitize the data: ensure all values are proper Python types, not SQLAlchemy expressions
-    # and ensure all columns exist in each dictionary
-    sanitized_data = []
-    for record in manifest_calls_data:
-        sanitized_record = {}
-        for col in ManifestCall.__table__.columns:
-            col_name = col.name
-            value = record.get(col_name)
-            
-            # Convert pandas/numpy types to native Python types
-            if value is not None:
-                if hasattr(value, 'item'):  # numpy types have .item() method
-                    value = value.item()
-                elif col.type.python_type == int and not isinstance(value, int):
-                    try:
-                        value = int(value)
-                    except (ValueError, TypeError):
-                        value = None
-            
-            sanitized_record[col_name] = value
-        sanitized_data.append(sanitized_record)
-
-    # Create the insert statement
-    stmt = insert(ManifestCall).values(sanitized_data)
-    
-    # Define what to do on conflict (update all columns except the primary key and manifest_id)
-    # Get all column names from the model, excluding the primary key and manifest_id
-    update_dict = {
-        col.name: stmt.excluded[col.name] 
-        for col in ManifestCall.__table__.columns 
-        if not col.primary_key and col.name != 'manifest_id'
-    }
-    
-    # Add the on conflict clause
-    stmt = stmt.on_conflict_do_update(
-        index_elements=['numero_commande'],  # The constraint to check
-        set_=update_dict
-    )
-    
-    # Execute the statement
-    db.execute(stmt)
-    db.commit()
-    return len(manifest_calls_data)
+    try:
+        stmt = insert(ManifestCall).values(manifest_calls_data)
+        
+        # Update all columns except primary key and foreign key on conflict
+        update_dict = {
+            col.name: stmt.excluded[col.name] 
+            for col in ManifestCall.__table__.columns 
+            if col.name not in ['numero_commande', 'manifest_id']  # Keep FK stable
+        }
+        
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['numero_commande'],
+            set_=update_dict
+        )
+        
+        result = db.execute(stmt)
+        db.commit()
+        
+        return
+        
+    except Exception as e:
+        db.rollback()
+        raise
 
 def get_manifest_call(db: Session, numero_commande: str) -> Optional[ManifestCall]:
     """Get a manifest call by numero_commande."""

@@ -235,6 +235,7 @@ def main():
     
     input = config['ingestion']['input_folder']
     if input:
+        # this for indexing the calls in the database json files
         run_ingestion(config, input_folder= input)
 
     # date = '2025-11-19'

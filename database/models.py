@@ -63,24 +63,22 @@ class ManifestCall(Base):
     # Relationship back to Manifest
     manifest = relationship("Manifest", back_populates="calls")
     MDN = Column(String, nullable=True)
+    numero_ordre = Column(String, nullable=True)
     client_number = Column(String, nullable=True)
     date_commande = Column(DateTime, nullable=True)
     date_suspension = Column(DateTime, nullable=True)
     categorie = Column(String, nullable=True)
+    motif_suspension = Column(String, nullable=True)
     nbr_tentatives_appel = Column(Integer, nullable=True)
     conformite_intervalle = Column(String, nullable=True)
     appels_branch = Column(String, nullable=True)
     nb_tonnalite = Column(Integer, nullable=True)
-    beep_count = Column(Integer, nullable=True)
     high_beeps = Column(Integer, nullable=True)
-    status = Column(String, nullable=True)
     classification_modele = Column(String, nullable=True)
     qualite_communication = Column(String, nullable=True)
     conformite_IAM = Column(String, nullable=True)
     commentaire = Column(String, nullable=True)
-    motif_suspension = Column(String, nullable=True)
     processed = Column(Boolean, nullable=True)
-    compliance = Column(String, nullable=True)
 
 
 
