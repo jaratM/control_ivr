@@ -355,10 +355,10 @@ def assembler_worker(assembly_queue, classification_queue, config, assembler_out
             continue
 
 # --- Classification & Compliance Worker ---
-def classification_worker(classification_queue, result_queue, config, metrics=None):
+def classification_worker(classification_queue, result_queue, config, metrics=None, category: str = 'sav'):
     # This worker calls AWS Bedrock (simulated)
     # It should be run in multiple threads/processes to handle I/O latency
-    classifier = Classifier(config=config) # API Client
+    classifier = Classifier(category=category,config=config) # API Client
     
     worker_name = multiprocessing.current_process().name
     logger.info(f"[{worker_name}] Classification worker started")
@@ -377,12 +377,12 @@ def classification_worker(classification_queue, result_queue, config, metrics=No
             classification_start = time.time()
                 
             # 1. Call AWS Bedrock (Simulated)
-            # class_result = classifier.classify_full_text(input_data.full_transcript, input_data.file_id)
-            class_result = ClassificationResult(
-                status="Silence",
-                behavior="Bien",
-                file_id=input_data.file_id
-            )
+            class_result = classifier.classify_full_text(input_data.full_transcript, input_data.file_id)
+            # class_result = ClassificationResult(
+            #     status="Silence",
+            #     behavior="Bien",
+            #     file_id=input_data.file_id
+            # )
             
             classification_duration = time.time() - classification_start
             

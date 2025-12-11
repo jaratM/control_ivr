@@ -1,6 +1,6 @@
 pipeline:
   num_ingestion_workers: 32
-  num_classification_workers: 8
+  num_classification_workers: 1
   batch_size: 32
   batch_timeout_ms: 100
   max_queue_size: 1000
@@ -9,22 +9,20 @@ processing:
   target_sample_rate: 16000
   chunk_duration_sec: 25
   overlap_sec: 0.5
-  transcription_model: "$HOME/lustre/chatgpt_os-gtcy1ct0blo/shared/control-ivr/asr-control-ivr/w2v-bert-darija-finetuned-clean-ivr"
+  transcription_model: "model/w2v-bert-darija-finetuned-clean-ivr"
 
 ingestion:
-  input_folder: "/home/mohamed.jarat/lustre/chatgpt_os-gtcy1ct0blo/data/ingestion"
+  input_folder: input/
   
 gpu:
   use_multi_gpu: true
   
 logging:
   level: "INFO"
-  file: "pipeline.log"
+  file: "logs/pipeline"
 
 compliance_rules:
   max_beeps: 5
-  required_phrases: ["disclosure", "recorded"]
-  forbidden_phrases: ["guarantee"]
 
 storage:
   endpoint: "localhost:5058"
@@ -82,4 +80,5 @@ branche:
 
 
 classification:
-  prompt_file: "config/prompt.txt"
+  acquisition: "config/acquisition.txt"
+  sav: "config/sav.txt"

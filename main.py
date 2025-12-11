@@ -94,6 +94,8 @@ def process_single_manifest(
     manifest_id = str(uuid.uuid4())
     filename = local_path.split('/')[-1]
     suffix = f'{target_date}'.replace('-','')
+    if 'sav' in filename.lower():
+        filename = filename.replace('.xlsx', f'_{suffix}.xlsx')
     manifest_record = get_manifest(db, filename)
     if manifest_record: 
         if manifest_record.status == ManifestStatus.COMPLETED:

@@ -222,17 +222,17 @@ class ComplianceVerifier:
             beep_count = commande_res.beep_count
             
             # Check for silence status with insufficient beeps
-            if commande_res.classification.status == 'silence':
+            if commande_res.classification.status.lower() == 'silence':
                 if commande_res.beep_count < 5 and commande_res.high_beeps < 1:
                     is_compliant = self.STATUS_NON_CONFORM
                     commentaire += "Moins de 5 beeps trouvés. "
                 break
             
             # Verify classification matches injoignable motif
-            if commande_res.classification.status != self.MOTIF_INJOIGNABLE:
+            if commande_res.classification.status.lower() != self.MOTIF_INJOIGNABLE:
                 is_compliant = self.STATUS_NON_CONFORM
                 commentaire += f"Classification non conforme: {commande_res.classification.status}. "
-                classification_modele = commande_res.classification.status
+                classification_modele = commande_res.classification.status.lower()
         
         return beep_count, high_beeps, classification_modele, behavior, is_compliant, commentaire
     
@@ -273,13 +273,13 @@ class ComplianceVerifier:
             classification_modele = getattr(classification_data, 'status', '')
             behavior = getattr(classification_data, 'behavior', '')
         else:
-            classification_modele = ''
+            classification_modele = 'autre'
             behavior = ''
         
         # Verify classification matches expected motif
         if classification_modele != current_motif:
             is_compliant = self.STATUS_NON_CONFORM
-            commentaire += f"Classification non conforme: {classification_modele}. "
+            commentaire += f"Classification non conforme: {classification_modele.lower()}. "
         
         return beep_count, high_beeps, classification_modele, behavior, is_compliant, commentaire
     
@@ -305,6 +305,8 @@ class ComplianceVerifier:
             is_compliant: Compliance status (Conform/Non conforme)
             commentaire: Compliance comments
         """
+        if classification_modele.lower() == "silence":
+            classification_modele = "CLIENT INJOIGNABLE"
         row_data.update({
             'nb_tonnalite': beep_count,
             'high_beeps': high_beeps,
@@ -433,7 +435,7 @@ class ComplianceVerifier:
             current_motif = row_data.get('motif_suspension')
             
             # Process based on motif type
-            if current_motif == self.MOTIF_INJOIGNABLE:
+            if current_motif.lower() == self.MOTIF_INJOIGNABLE:
                 beep_count, high_beeps, classification_modele, behavior, is_compliant, commentaire = \
                     self._process_injoignable_commande(commande_results, row_data)
             else:

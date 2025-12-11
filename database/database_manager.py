@@ -118,32 +118,9 @@ def bulk_update_manifest_calls(db: Session, manifest_calls_data: List[dict]):
 def bulk_insert_manifest_calls(db: Session, manifest_calls_data: List[dict]):
     """Bulk insert manifest calls."""
     
-    if not manifest_calls_data:
-        return
-
-    try:
-        stmt = insert(ManifestCall).values(manifest_calls_data)
-        
-        # Update all columns except primary key and foreign key on conflict
-        update_dict = {
-            col.name: stmt.excluded[col.name] 
-            for col in ManifestCall.__table__.columns 
-            if col.name not in ['numero_commande', 'manifest_id']  # Keep FK stable
-        }
-        
-        stmt = stmt.on_conflict_do_update(
-            index_elements=['numero_commande'],
-            set_=update_dict
-        )
-        
-        result = db.execute(stmt)
-        db.commit()
-        
-        return
-        
-    except Exception as e:
-        db.rollback()
-        raise
+    db.bulk_insert_mappings(ManifestCall, manifest_calls_data)
+    db.commit()
+    return
 
 def get_manifest_call(db: Session, numero_commande: str) -> Optional[ManifestCall]:
     """Get a manifest call by numero_commande."""

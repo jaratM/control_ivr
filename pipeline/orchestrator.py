@@ -129,7 +129,7 @@ class PipelineOrchestrator:
         for i in range(num_classifiers):
             p = multiprocessing.Process(
                 target=classification_worker,
-                args=(classification_queue, result_queue, self.config, metrics),
+                args=(classification_queue, result_queue, self.config, metrics, category),
                 name=f"Classifier-{i}"
             )
             p.start()
@@ -176,20 +176,7 @@ class PipelineOrchestrator:
         
         # Convert list of dicts to DataFrame for CSV export
         compliance_df = pd.DataFrame(compliance_list)
-        
-        logger.info(f"Compliance dataframe columns: {compliance_df.columns}")
-        # Log comprehensive metrics summary
-        # if manifest_type == "SAV":
-        #     columns = ["numero_commande","MDN","client_number","date_commande","date_suspension","categorie","Nbr_tentatives_appel",
-        #     "Conformité Intervalle","appels_branch","Nb_tonnalite","motif_suspension", "Classification modele","Qualite_communication","Conformite_IAM", "Commentaires"]
-        # else:
-        #     columns = ["numero_commande","client_number","date_commande","date_suspension","Nbr_tentatives_appel",
-        #     "Conformité Intervalle","appels_branch","Nb_tonnalite","motif_suspension", "Classification modele","Qualite_communication","Conformite_IAM", "Commentaires"]
-
-        # # Filter to only include columns that exist in the DataFrame
-        # existing_columns = [col for col in columns if col in compliance_df.columns]
-        # compliance_df = compliance_df[existing_columns]
-        
+               
         # Bulk upsert all manifest calls (handles both new and existing records)
         logger.info(f"Upserting {len(compliance_list)} manifest calls")
         bulk_insert_manifest_calls(db, compliance_list)

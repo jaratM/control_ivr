@@ -128,7 +128,7 @@ class ManifestProcessor:
             # Convert DataFrame to list of dicts, default to empty list if df is None
             if df is not None:
                 df['manifest_id'] = manifest_record.id
-                logger.info(f"Processing {filename}: Columns: {df.columns}")
+                # logger.info(f"Processing {filename}: Columns: {df.columns}")
                 df_dict = df.to_dict(orient='records')
             else:
                 df_dict = []

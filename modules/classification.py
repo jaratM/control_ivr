@@ -4,8 +4,10 @@ import os
 import boto3
 import json
 import re
+import random
 from typing import Dict, Tuple
 from botocore.exceptions import ClientError
+from botocore.config import Config
 from loguru import logger
 # INSERT_YOUR_CODE
 from dotenv import load_dotenv
@@ -19,14 +21,14 @@ class Classifier:
 
     CATEGORY_MAP = {
         0: "Silence",
-        1: "Le client refuse l'installation",
-        2: "Le client reporte le RDV",
-        3: "Le client injoignable",
-        4: "Aucune des options ci-dessus",
+        1: "Client refuse installation",
+        2: "Client reporte RDV",
+        3: "CLIENT INJOIGNABLE ",
+        4: "autre",
         5: "Attente retour client",
         6: "Client Absent",
-        7: "Abscence Routeur Client",
-        8: "Local Fermé",
+        7: "Absence routeur client",
+        8: "local ferme",
     }
     
     TECHNICIAN_BEHAVIOR_MAP = {
@@ -36,6 +38,7 @@ class Classifier:
 
     def __init__(
         self,
+        category: str,
         aws_region: str = "us-west-2",
         model_id: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         log: bool = True,
@@ -44,6 +47,14 @@ class Classifier:
         self.model_id = model_id
         self.log = log
         self.config = config
+        # Configure boto3 with reduced retries so our custom retry logic can handle throttling
+        boto_config = Config(
+            retries={
+                'max_attempts': 2,  # Reduce boto3's internal retries
+                'mode': 'adaptive'
+            }
+        )
+        
         aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
         aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
         aws_session_token = os.getenv("AWS_SESSION_TOKEN")
@@ -54,9 +65,10 @@ class Classifier:
                 aws_access_key_id=aws_access_key,
                 aws_secret_access_key=aws_secret_key,
                 aws_session_token=aws_session_token,
+                config=boto_config,
             )
         else:
-            self.bedrock = boto3.client("bedrock-runtime", region_name=aws_region)
+            self.bedrock = boto3.client("bedrock-runtime", region_name=aws_region, config=boto_config)
 
         if self.log:
             logger.info(f"\n[Classifier] Initialized with {model_id} (Claude)")
@@ -64,7 +76,7 @@ class Classifier:
         # Load prompt from external file
         try:
             config_classification = self.config.get('classification', {}) if self.config else {}
-            prompt_file = config_classification.get('prompt_file', 'prompt.txt')
+            prompt_file = config_classification.get(category, 'config/sav.txt')
             with open(prompt_file, "r", encoding="utf-8") as f:
                 self.system_prompt = f.read().strip()
             if self.log:
@@ -132,22 +144,37 @@ class Classifier:
         return system_prompt, user_prompt
 
     def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
-        """Call Claude LLM via Bedrock."""
-        max_attempts = 6
-        base_delay = 1.0
+        """Call Claude LLM via Bedrock with exponential backoff and jitter."""
+        max_attempts = self.config.get('max_attempts', 10)  # Increased default
+        base_delay = 2.0  # Increased base delay
+        max_delay = 300.0  # Cap at 5 minutes
 
         for attempt in range(1, max_attempts + 1):
             try:
                 return self._call_claude(system_prompt, user_prompt)
                     
             except ClientError as e:
-                code = e.response.get("Error", {}).get("Code", "")
-                if code != "ThrottlingException" or attempt == max_attempts:
+                error_response = e.response.get("Error", {})
+                code = error_response.get("Code", "")
+                message = error_response.get("Message", "")
+                
+                # Handle throttling and rate limiting errors
+                is_throttle = code in ["ThrottlingException", "TooManyRequestsException"] or "throttl" in message.lower() or "too many requests" in message.lower()
+                
+                if not is_throttle or attempt == max_attempts:
+                    # Non-throttling error or final attempt - raise
+                    if attempt == max_attempts and is_throttle:
+                        logger.error(f"[Classifier] Max retries ({max_attempts}) reached for throttling. Last error: {code} - {message}")
                     raise
-                sleep_time = base_delay * (2 ** attempt)
+                
+                # Exponential backoff with jitter
+                exponential_delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+                jitter = random.uniform(0, exponential_delay * 0.3)  # Add up to 30% jitter
+                sleep_time = exponential_delay + jitter
+                
                 if self.log:
                     logger.warning(f"[Classifier] Throttled (attempt {attempt}/{max_attempts}), "
-                          f"sleeping {sleep_time:.0f}s…")
+                          f"sleeping {sleep_time:.1f}s (exponential: {exponential_delay:.1f}s + jitter: {jitter:.1f}s)")
                 time.sleep(sleep_time)
 
     def _call_claude(self, system_prompt: str, user_prompt: str) -> str:
