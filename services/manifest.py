@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import List, Optional, Tuple, Union
 from sqlalchemy.orm import Session
 from loguru import logger
-from database.models import Call, Manifest, ManifestStatus
+from database.models import Call, Manifest, ManifestStatus, ManifestCall
 from database.database_manager import get_calls, get_manifest
 import uuid
 from database.database_manager import update_manifest_status
@@ -102,23 +102,33 @@ class ManifestProcessor:
         manifest_type = ''
         category = ''
         try:
+            # Acquisition adsl csv
             if 'crc_adsl' in filename.lower():
-                df, calls_metadata = self._parse_acquisition(csv_path, processing_date, manifest_type='ADSL')
+                df, calls_metadata = self._parse_acquisition(csv_path, processing_date, category='ADSL')
                 manifest_type = 'ACQUISITION'
                 category = 'ADSL'
+                df['categorie'] = category
+                df['MDN'] = None
+            # Acquisition vuLA csv
             elif 'crc_vula' in filename.lower():
-                df, calls_metadata = self._parse_acquisition(csv_path, processing_date, manifest_type='VULA')
+                df, calls_metadata = self._parse_acquisition(csv_path, processing_date, category='VULA')
                 manifest_type = 'ACQUISITION'
                 category = 'VULA'
+                df['categorie'] = category
+                df['MDN'] = None
+                df['numero_ordre'] = None
+            # SAV csv
             elif 'sav' in filename.lower():
                 df, calls_metadata = self._parse_sav(csv_path, processing_date)
                 manifest_type = 'SAV'
+                df['numero_ordre'] = None
             else:
                 raise ValueError(f"Unsupported file type: {filename}")
             
             # Convert DataFrame to list of dicts, default to empty list if df is None
             if df is not None:
                 df['manifest_id'] = manifest_record.id
+                logger.info(f"Processing {filename}: Columns: {df.columns}")
                 df_dict = df.to_dict(orient='records')
             else:
                 df_dict = []
@@ -130,7 +140,7 @@ class ManifestProcessor:
             update_manifest_status(self.db, manifest_record.id, ManifestStatus.FAILED)
             return [], [], None, None, None
 
-    def _parse_acquisition(self, csv_path: str, date_suspension: Optional[datetime], manifest_type: str) -> Tuple[pd.DataFrame, List[Call]]:
+    def _parse_acquisition(self, csv_path: str, date_suspension: Optional[datetime], category: str) -> Tuple[pd.DataFrame, List[Call]]:
         """
         Parse ACQUISITION ADSL or VULA CSV files (unified logic).
         - Read the CSV file
@@ -142,7 +152,7 @@ class ManifestProcessor:
         - Only keep columns that exist in the dataframe
         - Return the dataframe and calls metadata
         """
-        config_mapping = self.config['csv_mappings']['acquisition'].get(manifest_type, {})
+        config_mapping = self.config['csv_mappings']['acquisition'].get(category, {})
         
         # Try reading with multiple fallback strategies
         df = self._read_df(csv_path)
@@ -168,7 +178,7 @@ class ManifestProcessor:
         df = self._convert_date_columns(df, RECYCLAGE_DATE_COLUMNS + ["date_commande", "date_suspension"])
         
         # Adjust date_commande  based on recyclage dates
-        df = self._adjust_date_commande_from_recyclage(df, manifest_type)
+        df = self._adjust_date_commande_from_recyclage(df, category)
         
         # Normalize phone numbers
         df["client_number"] = df["client_number"].astype(str).apply(normalize_phone_number)
@@ -179,6 +189,8 @@ class ManifestProcessor:
         
         # Only keep columns that exist in the dataframe
         available_columns = [col for col in config_mapping.values() if col in df.columns and col != "status_commande"]
+        
+        
         df = df[available_columns]
         
         df['nbr_tentatives_appel'] = [len(c) for c in calls_metadata]
