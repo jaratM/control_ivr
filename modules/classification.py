@@ -1,13 +1,11 @@
 from .types import ClassificationResult, ClassificationInput
 import time
 import os
-import boto3
+import requests
 import json
 import re
 import random
 from typing import Dict, Tuple
-from botocore.exceptions import ClientError
-from botocore.config import Config
 from loguru import logger
 # INSERT_YOUR_CODE
 from dotenv import load_dotenv
@@ -15,7 +13,7 @@ load_dotenv()
 
 class Classifier:
     """
-    Classifies call outcomes using Claude via AWS Bedrock.
+    Classifies call outcomes using Claude via an external API.
     Returns deterministic two-digit output: call type (0-8) + technician behavior (0-1).
     """
 
@@ -23,7 +21,7 @@ class Classifier:
         0: "Silence",
         1: "Client refuse installation",
         2: "Client reporte RDV",
-        3: "CLIENT INJOIGNABLE ",
+        3: "CLIENT INJOIGNABLE",
         4: "autre",
         5: "Attente retour client",
         6: "Client Absent",
@@ -47,31 +45,18 @@ class Classifier:
         self.model_id = model_id
         self.log = log
         self.config = config
-        # Configure boto3 with reduced retries so our custom retry logic can handle throttling
-        boto_config = Config(
-            retries={
-                'max_attempts': 2,  # Reduce boto3's internal retries
-                'mode': 'adaptive'
-            }
-        )
         
-        aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
-        aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
-        aws_session_token = os.getenv("AWS_SESSION_TOKEN")
-        if aws_access_key and aws_secret_key:
-            self.bedrock = boto3.client(
-                "bedrock-runtime",
-                region_name=aws_region,
-                aws_access_key_id=aws_access_key,
-                aws_secret_access_key=aws_secret_key,
-                aws_session_token=aws_session_token,
-                config=boto_config,
-            )
-        else:
-            self.bedrock = boto3.client("bedrock-runtime", region_name=aws_region, config=boto_config)
+        self.api_url = os.getenv("BEDROCK_API_URL")
+        # Fallback to a constructed URL if API_ID is present
+        if not self.api_url:
+            api_id = os.getenv("BEDROCK_API_ID")
+            if api_id:
+                self.api_url = f"https://{api_id}.execute-api.eu-west-3.amazonaws.com/dev/chat"
+            elif self.log:
+                logger.warning("[Classifier] BEDROCK_API_URL or BEDROCK_API_ID not set in environment.")
 
         if self.log:
-            logger.info(f"\n[Classifier] Initialized with {model_id} (Claude)")
+            logger.info(f"\n[Classifier] Initialized (API Mode)")
         
         # Load prompt from external file
         try:
@@ -92,6 +77,8 @@ class Classifier:
                 logger.info(f"\n[Classification] Processing...")
 
             if not full_text or len(full_text) < 5:
+                # Default to (Silence, Good Behavior) for empty text? 
+                # Original code used 0, 1
                 return self._make_result(0, 1, file_id)
 
             system_prompt, user_prompt = self._build_prompts(full_text)
@@ -144,58 +131,75 @@ class Classifier:
         return system_prompt, user_prompt
 
     def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
-        """Call Claude LLM via Bedrock with exponential backoff and jitter."""
-        max_attempts = self.config.get('max_attempts', 10)  # Increased default
-        base_delay = 2.0  # Increased base delay
-        max_delay = 300.0  # Cap at 5 minutes
+        """Call Claude via requests with retries."""
+        if not self.api_url:
+            raise ValueError("BEDROCK_API_URL is not set.")
+
+        max_attempts = self.config.get('max_attempts', 10)
+        base_delay = 2.0
+        max_delay = 300.0
+
+        full_message = f"{system_prompt}\n\n{user_prompt}" if system_prompt else user_prompt
+
+        payload = {
+            "message": full_message,
+            "history": [] # No history for single-turn classification
+        }
 
         for attempt in range(1, max_attempts + 1):
             try:
-                return self._call_claude(system_prompt, user_prompt)
-                    
-            except ClientError as e:
-                error_response = e.response.get("Error", {})
-                code = error_response.get("Code", "")
-                message = error_response.get("Message", "")
-                
-                # Handle throttling and rate limiting errors
-                is_throttle = code in ["ThrottlingException", "TooManyRequestsException"] or "throttl" in message.lower() or "too many requests" in message.lower()
-                
-                if not is_throttle or attempt == max_attempts:
-                    # Non-throttling error or final attempt - raise
-                    if attempt == max_attempts and is_throttle:
-                        logger.error(f"[Classifier] Max retries ({max_attempts}) reached for throttling. Last error: {code} - {message}")
-                    raise
-                
-                # Exponential backoff with jitter
-                exponential_delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
-                jitter = random.uniform(0, exponential_delay * 0.3)  # Add up to 30% jitter
-                sleep_time = exponential_delay + jitter
-                
-                if self.log:
-                    logger.warning(f"[Classifier] Throttled (attempt {attempt}/{max_attempts}), "
-                          f"sleeping {sleep_time:.1f}s (exponential: {exponential_delay:.1f}s + jitter: {jitter:.1f}s)")
-                time.sleep(sleep_time)
+                response = requests.post(
+                    self.api_url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=30 
+                )
 
-    def _call_claude(self, system_prompt: str, user_prompt: str) -> str:
-        """Claude-specific API format."""
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "system": system_prompt,
-            "temperature": 0.0,
-            "max_tokens": 200,
-            "stop_sequences": [".", "–", "-", "→"],
-            "messages": [{"role": "user", "content": user_prompt}],
-        }
-        
-        response = self.bedrock.invoke_model(
-            modelId=self.model_id,
-            body=json.dumps(body).encode("utf-8"),
-            accept="application/json",
-            contentType="application/json",
-        )
-        payload = json.loads(response["body"].read())
-        return payload["content"][0]["text"].strip()
+                if response.status_code == 200:
+                    resp_json = response.json()
+                    if resp_json.get("status") == "success":
+                        return resp_json["data"]["response"]
+                    else:
+                        raise ValueError(f"API returned non-success status: {resp_json}")
+
+                # Handle Errors
+                if response.status_code == 429:
+                    error_msg = response.json().get("message", "Unknown 429 error")
+                    error = response.json().get('error', '')
+                    logger.error(f"[Classifier] 429 Error ({error}): {error_msg}")
+                    raise Exception(f"API 429 Error ({error}): {error_msg}")
+                
+                if response.status_code == 400:
+                    error_msg = response.json().get("message", "Bad request")
+                    raise ValueError(f"API 400 Bad Request: {error_msg}")
+                
+                response.raise_for_status()
+
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.HTTPError) as e:
+                # Retry on network/server errors
+                is_server_error = False
+                if isinstance(e, requests.exceptions.HTTPError) and e.response is not None:
+                     if e.response.status_code >= 500:
+                         is_server_error = True
+                
+                should_retry = isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)) or is_server_error
+
+                if should_retry and attempt < max_attempts:
+                    exponential_delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+                    jitter = random.uniform(0, exponential_delay * 0.3)
+                    sleep_time = exponential_delay + jitter
+                    
+                    if self.log:
+                        logger.warning(f"[Classifier] API Request failed (attempt {attempt}/{max_attempts}): {e}. Sleeping {sleep_time:.1f}s")
+                    time.sleep(sleep_time)
+                else:
+                    if self.log and attempt == max_attempts:
+                        logger.error(f"[Classifier] Max retries reached. Last error: {e}")
+                    raise e
+            
+            except Exception as e:
+                # Non-retryable
+                raise e
 
     @staticmethod
     def _parse_response(response: str) -> Tuple[int, int, str]:
@@ -204,24 +208,19 @@ class Classifier:
         model response.
         """
         if not response:
-            # Default to (Other, Good Behavior)
             return 4, 1, "Empty model response; defaulting to 41."
 
-        # Regex to find the first digit [0-8] followed by the second [0-1]
         m = re.search(r"([0-8])\s*([0-1])", response) 
 
         if not m:
-            # Fallback: if only one digit is found, default tech behavior to 1
             m_single = re.search(r"[0-8]", response)
             if m_single:
                 call_type = int(m_single.group())
                 return call_type, 1, f"Only found one digit: {response!r}. Defaulting tech behavior to 1."
             
-            # Default to (Other, Good Behavior) if no valid digits are found
             return 4, 1, f"No valid digits in model response: {response!r}. Defaulting to 41."
         
         call_type = int(m.group(1))
         tech_behavior = int(m.group(2))
         
         return call_type, tech_behavior, f"Model returned: {response!r}"
-   

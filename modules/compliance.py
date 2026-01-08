@@ -22,7 +22,7 @@ class ComplianceVerifier:
         # Default values for beep analysis
     DEFAULT_BEEP_COUNT = 100
     DEFAULT_HIGH_BEEPS = 100
-    MOTIF_INJOIGNABLE = 'injoignable'
+    MOTIF_INJOIGNABLE = 'client injoignable'
 
     def _parse_start_time(self, call: Dict) -> datetime:
         """Helper to parse start_time (handles both datetime objects and ISO strings from serialization)"""
@@ -90,7 +90,7 @@ class ComplianceVerifier:
         else:
             for call in sorted_calls:
                 if call.get('branch') != target_branch:
-                    is_compliant = self.STATUS_NON_CONFORM
+                    # is_compliant = self.STATUS_NON_CONFORM
                     is_branch_calls = self.STATUS_NON_CONFORM
                     comments.append("Branche non conforme, ")
                     break
@@ -214,25 +214,28 @@ class ComplianceVerifier:
         commentaire = row_data.get('commentaire', '') or ''
         beep_count = self.DEFAULT_BEEP_COUNT
         high_beeps = self.DEFAULT_HIGH_BEEPS
-        classification_modele = self.MOTIF_INJOIGNABLE
+        classification_modele = ""
         behavior = ''
         
         for commande_res in commande_results:
             high_beeps = commande_res.high_beeps
             beep_count = commande_res.beep_count
-            
+            classification_modele = commande_res.classification.status.strip().lower()
             # Check for silence status with insufficient beeps
-            if commande_res.classification.status.lower() == 'silence':
+            if classification_modele == 'silence':
                 if commande_res.beep_count < 5 and commande_res.high_beeps < 1:
                     is_compliant = self.STATUS_NON_CONFORM
-                    commentaire += "Moins de 5 beeps trouvés. "
-                break
+                    commentaire += ", Moins de 5 beeps trouvés. "
+                    classification_modele = self.CLIENT_UNREACHABLE
+                    break
+                classification_modele = self.CLIENT_UNREACHABLE
+
             
             # Verify classification matches injoignable motif
-            if commande_res.classification.status.lower() != self.MOTIF_INJOIGNABLE:
+            if classification_modele != self.CLIENT_UNREACHABLE:
                 is_compliant = self.STATUS_NON_CONFORM
-                commentaire += f"Classification non conforme: {commande_res.classification.status}. "
-                classification_modele = commande_res.classification.status.lower()
+                commentaire += f", Classification non conforme: {classification_modele}. "
+                break
         
         return beep_count, high_beeps, classification_modele, behavior, is_compliant, commentaire
     
@@ -277,9 +280,10 @@ class ComplianceVerifier:
             behavior = ''
         
         # Verify classification matches expected motif
-        if classification_modele != current_motif:
+        
+        if classification_modele.lower() != current_motif.lower():
             is_compliant = self.STATUS_NON_CONFORM
-            commentaire += f"Classification non conforme: {classification_modele.lower()}. "
+            commentaire += f" Classification non conforme: {classification_modele.lower()}. "
         
         return beep_count, high_beeps, classification_modele, behavior, is_compliant, commentaire
     

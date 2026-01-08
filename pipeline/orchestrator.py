@@ -180,7 +180,10 @@ class PipelineOrchestrator:
         # Bulk upsert all manifest calls (handles both new and existing records)
         logger.info(f"Upserting {len(compliance_list)} manifest calls")
         bulk_insert_manifest_calls(db, compliance_list)
-            
+
+        # Drop 'processed' and 'manifest_id' columns if they exist
+        compliance_df = compliance_df.drop(columns=[col for col in ['processed', 'manifest_id', 'high_beeps'] if col in compliance_df.columns])
+
         compliance_df.to_csv(f"{output_path}/result_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", index=False)
         logger.info(f"Saving compliance dataframe to {output_path}result_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
         return metrics

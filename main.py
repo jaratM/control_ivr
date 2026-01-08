@@ -117,12 +117,12 @@ def process_single_manifest(
         db.add(manifest_record)
         db.commit()
         
-    df_dict, calls_metadata, base_manifest_type, category, manifest_record = processor.process_manifest(
+    df_dict, calls_metadata, base_manifest_type, category = processor.process_manifest(
         local_path, target_date, manifest_record
     )
 
     if len(df_dict) == 0:
-        logger.warning(f"No data processed for {manifest_file}")
+        logger.warning(f"No data to be processed for {manifest_file}. Skipping...")
         update_manifest_status(db, manifest_record.id, ManifestStatus.FAILED)
         return False        # No data processed
     
@@ -172,7 +172,7 @@ def process_manifests(config: dict, config_path: str, target_date: str, prefix: 
 
     output_base_dir = f"output/{target_date}/"
     os.makedirs(output_base_dir, exist_ok=True)
-
+    logger.info(f"Processing {len(manifest_files)} manifests")
     with tempfile.TemporaryDirectory() as temp_dir:
         with get_db_session() as db:
             processor = ManifestProcessor(db, config)
@@ -192,9 +192,9 @@ def process_manifests(config: dict, config_path: str, target_date: str, prefix: 
                         output_base_dir=output_base_dir,
                         db=db
                     )
+            
                 except Exception as e:
                     logger.error(f"Error processing {manifest_file}: {e}")
-
 
 def run_ingestion(config: dict, input_folder: str = None):
     """Run ingestion of the Minio bucket and index the calls in the database."""

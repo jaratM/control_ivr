@@ -133,12 +133,12 @@ class ManifestProcessor:
             else:
                 df_dict = []
                 
-            return df_dict, calls_metadata, manifest_type, category, manifest_record
+            return df_dict, calls_metadata, manifest_type, category
 
         except Exception as e:
             logger.error(f"Error processing manifest {csv_path}: {e}")
             update_manifest_status(self.db, manifest_record.id, ManifestStatus.FAILED)
-            return [], [], None, None, None
+            return [], [], None, None
 
     def _parse_acquisition(self, csv_path: str, date_suspension: Optional[datetime], category: str) -> Tuple[pd.DataFrame, List[Call]]:
         """
