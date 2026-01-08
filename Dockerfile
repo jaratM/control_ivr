@@ -3,7 +3,7 @@
 # ==========================================
 # Based on PyTorch with CUDA support
 
-FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 
 # Labels
 LABEL description="Control IVR Audio Compliance Pipeline (GPU)"
@@ -50,7 +50,7 @@ RUN chmod +x run_cron.sh
 # Create directories for output and logs
 RUN mkdir -p /app/output /app/logs /app/models
 
-VOLUME ["/app/output", "/app/logs", "/app/models", "/app/input_folder"]
+VOLUME ["/app/output", "/app/logs", "/app/model", "/app/input"]
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
@@ -60,4 +60,3 @@ ENV PYTHONPATH=/app
 # Default command - run the cron script
 ENTRYPOINT ["/bin/bash"]
 CMD ["./run_cron.sh"]
-

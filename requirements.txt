@@ -3,9 +3,9 @@
 # ==========================================
 
 # ---- Deep Learning & ML Framework ----
-torch==2.5.1
-torchaudio==2.5.1
-transformers==4.43.3            # Wav2Vec2BertForCTC, Wav2Vec2BertProcessor
+torch==2.6.0
+torchaudio==2.6.0
+transformers==4.48.0             # Wav2Vec2BertForCTC, Wav2Vec2BertProcessor
 
 # ---- Audio Processing ----
 librosa==0.10.2.post1           # Audio analysis, spectrogram, RMS
