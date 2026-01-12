@@ -59,10 +59,12 @@ class MinioStorage:
                 return None
         return None
 
-    def upload_file(self, object_name: str, file_path: str):
+    def upload_file(self, file_path: str, object_name: str):
         """Uploads a file from local path."""
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}")
+            
         try:
-            # fput_object(bucket_name, object_name, file_path, ...)
             self.client.fput_object(bucket_name=self.bucket_name, object_name=object_name, file_path=file_path)
             logger.info(f"Uploaded {file_path} to {object_name}")
         except S3Error as e:
@@ -71,8 +73,39 @@ class MinioStorage:
     def download_file(self, object_name: str, file_path: str) -> bool:
         """Downloads a file to local path."""
         try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+            
             self.client.fget_object(bucket_name=self.bucket_name, object_name=object_name, file_path=file_path)
             return True
         except S3Error as e:
             logger.error(f"Error downloading {object_name}: {e}")
             return False
+
+    def file_exists(self, object_name: str) -> bool:
+        """Checks if a file exists in the bucket."""
+        try:
+            self.client.stat_object(bucket_name=self.bucket_name, object_name=object_name)
+            return True
+        except S3Error as e:
+            if e.code == 'NoSuchKey':
+                return False
+            # Check for other errors that might indicate non-existence or access issues
+            logger.warning(f"Error checking file existence {object_name}: {e}")
+            return False
+            
+    def delete_file(self, object_name: str):
+        """Deletes a file from the bucket."""
+        try:
+            self.client.remove_object(bucket_name=self.bucket_name, object_name=object_name)
+            logger.info(f"Deleted {object_name}")
+        except S3Error as e:
+            logger.error(f"Error deleting {object_name}: {e}")
+
+    def get_file_url(self, object_name: str) -> Optional[str]:
+        """Generates a presigned URL for the file."""
+        try:
+            return self.client.presigned_get_object(bucket_name=self.bucket_name, object_name=object_name)
+        except S3Error as e:
+            logger.error(f"Error generating URL for {object_name}: {e}")
+            return None

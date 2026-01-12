@@ -76,7 +76,7 @@ class Classifier:
             if self.log:
                 logger.info(f"\n[Classification] Processing...")
 
-            if not full_text or len(full_text) < 5:
+            if not full_text or len(full_text) < 4:
                 # Default to (Silence, Good Behavior) for empty text? 
                 # Original code used 0, 1
                 return self._make_result(0, 1, file_id)
@@ -120,6 +120,7 @@ class Classifier:
                     'Transcription: « الوقت لي غاتكون في الدار » → Answer: 21\n'
                     'Transcription: « نديرو الجمعة صباح » → Answer: 21\n'
                     'Transcription: « Orange vous remercie, votre correspondant n\'est pas joignable » → Answer: 31\n'
+                    'Transcription: « انكم في العلبة » → Answer: 31\n'
                 )
 
         user_prompt = (

@@ -58,7 +58,7 @@ class ComplianceVerifier:
         """Verify compliance for a single row"""
         is_compliant = self.STATUS_CONFORM
         is_dispatched = self.STATUS_CONFORM
-        is_branch_calls = self.STATUS_CONFORM
+        # is_branch_calls = self.STATUS_CONFORM
         comments = []
  
         count = row.get('nbr_tentatives_appel', 0)
@@ -73,7 +73,7 @@ class ComplianceVerifier:
             comments.append("Aucun appel trouvé")
             return {
                 'conformite_intervalle': '',
-                'appels_branch': '',
+                # 'appels_branch': '',
                 'conformite_IAM': self.STATUS_NON_CONFORM,
                 'commentaire': ", ".join(comments)
             }
@@ -82,18 +82,18 @@ class ComplianceVerifier:
         sorted_calls = sorted(calls, key=self._parse_start_time)
 
         # 2. Branch Verification
-        target_branch = config.get('branche', {}).get(manifest_type, {}).get(category)
+        # target_branch = config.get('branche', {}).get(manifest_type, {}).get(category)
         
-        if target_branch is None:
+        # if target_branch is None:
             # Configuration missing for this manifest_type/category - skip branch check
-            pass
-        else:
-            for call in sorted_calls:
-                if call.get('branch') != target_branch:
-                    # is_compliant = self.STATUS_NON_CONFORM
-                    is_branch_calls = self.STATUS_NON_CONFORM
-                    comments.append("Branche non conforme, ")
-                    break
+            # pass
+        # else:
+            # for call in sorted_calls:
+            #     if call.get('branch') != target_branch:
+            #         is_compliant = self.STATUS_NON_CONFORM
+            #         is_branch_calls = self.STATUS_NON_CONFORM
+            #         comments.append("Branche non conforme, ")
+            #         break
 
         # 3. Client Unreachable Logic
         status = str(row.get('motif_suspension', '')).strip()
@@ -131,7 +131,7 @@ class ComplianceVerifier:
 
         return {
             'conformite_intervalle': is_dispatched,
-            'appels_branch': is_branch_calls,
+            # 'appels_branch': is_branch_calls,
             'conformite_IAM': is_compliant,
             'commentaire': ", ".join(comments)
         }
