@@ -31,3 +31,4 @@ botocore==1.39.4                # AWS SDK core (required by boto3)
 PyYAML==6.0.2                   # YAML config file parsing
 python-dotenv==1.0.1            # Load environment variables from .env
 loguru==0.7.3                   # Structured logging
+pytest==9.0.2                   # Testing framework
