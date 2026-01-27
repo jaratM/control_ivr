@@ -16,6 +16,13 @@ class IngestionService:
         """
         Ingests a folder of files into the database.
         """
+        # Count files in the folder
+        all_files = [f for f in os.listdir(input_folder) if os.path.isfile(os.path.join(input_folder, f))]
+        json_files = [f for f in all_files if f.endswith('.json')]
+        
+        logger.info(f"Found {len(all_files)} total files in folder: {input_folder}")
+        logger.info(f"Found {len(json_files)} JSON files to process")
+        
         for file_name in os.listdir(input_folder):
             file_path = os.path.join(input_folder, file_name)
             if file_name.endswith('.json') and os.path.isfile(file_path):

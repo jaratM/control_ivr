@@ -479,50 +479,14 @@ low_params = {
 
 ## Technical Stack
 
-### Python Version
-- Python 3.9+ (tested with 3.10)
-
-### Core Dependencies
-
-| Package | Purpose |
-|---------|---------|
-| `torch>=2.0.0` | Deep learning framework for ASR |
-| `transformers` | Wav2Vec2-BERT model implementation |
-| `librosa` | Audio loading and analysis |
-| `soundfile` | Audio file I/O |
-| `torchaudio` | Audio transformations and resampling |
-| `scipy` | Signal processing for beep detection |
-| `numpy` | Numerical operations |
-| `pandas` | Data manipulation and CSV handling |
-| `sqlalchemy` | ORM for PostgreSQL |
-| `psycopg2-binary` | PostgreSQL driver |
-| `minio` | MinIO client SDK |
-| `pyyaml` | Configuration file parsing |
-| `loguru` | Structured logging |
-| `boto3` | AWS SDK for Bedrock access |
-| `python-dotenv` | Environment variable management |
-
 ### Hardware Requirements
-
-**Minimum Requirements**:
-- CPU: 8+ cores (for multiprocessing workers)
-- RAM: 32GB (for model loading and audio processing)
-- GPU: NVIDIA GPU with 8GB+ VRAM (for ASR inference)
-- Storage: 50GB+ for audio files and outputs
 
 **Recommended Configuration**:
 - CPU: 32+ cores
 - RAM: 64GB+
-- GPU: NVIDIA A100/V100 with 16GB+ VRAM
+- GPU: NVIDIA H100/V100 with 80GB+ VRAM
 - NVMe SSD for fast I/O
 
-### Containerization
-
-The project uses **Singularity** containers for HPC environments:
-
-- `pipeline.sif`: Main pipeline container
-- `postgres.sif`: PostgreSQL database container
-- `minio.sif`: MinIO object storage container
 
 ---
 
@@ -647,7 +611,7 @@ class ComplianceInput:
 ```yaml
 pipeline:
   num_ingestion_workers: 32    # Parallel download/analysis workers
-  num_classification_workers: 8 # Parallel LLM API workers
+  num_classification_workers: 1 # Parallel LLM API workers
   batch_size: 32                # Segments per GPU batch
   batch_timeout_ms: 100         # Max wait before batch flush
   max_queue_size: 1000          # Queue buffer limit
@@ -784,7 +748,7 @@ docker build -t control-ivr:v1.0 .
 
 #### Docker Image Details
 
-- **Base Image**: `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`
+- **Base Image**: `pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime`
 - **GPU Support**: CUDA 12.4 with cuDNN 9
 - **Working Directory**: `/app`
 - **Volumes**: 
@@ -934,11 +898,9 @@ The pipeline logs detailed timing and status information:
 
 | Log File | Contents |
 |----------|----------|
-| `logs/run_YYYYMMDD_HHMMSS.log` | Complete run output |
+| `logs/pipeline_YYYYMMDD_HHMMSS.log` | Complete run output |
 | `pipeline.log` | Rotating pipeline logs (500MB max) |
-| `db_new.log` | Database operations |
-| `postgres.log` | PostgreSQL server logs |
-| `minio.log` | MinIO server logs |
+
 
 ### Log Format
 
@@ -1046,13 +1008,13 @@ cat output/2025-12-09/ingestion_output_*.csv | head
 
 ```bash
 # Find errors
-grep -i error logs/run_*.log
+grep -i error logs/pipeline_*.log
 
 # Count processed files
-grep "Finished assembling" logs/run_*.log | wc -l
+grep "Finished assembling" logs/pipeline_*.log | wc -l
 
 # Track worker lifecycle
-grep -E "(started|exit|poison)" logs/run_*.log
+grep -E "(started|exit|poison)" logs/pipeline_*.log
 
 
 ## License

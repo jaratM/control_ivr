@@ -70,6 +70,22 @@ class MinioStorage:
         except S3Error as e:
             logger.error(f"Error uploading {object_name}: {e}")
 
+    def upload_bytes(self, data: bytes, object_name: str, content_type: str = "application/octet-stream"):
+        """Uploads data from bytes directly to Minio."""
+        try:
+            data_stream = io.BytesIO(data)
+            data_length = len(data)
+            self.client.put_object(
+                bucket_name=self.bucket_name,
+                object_name=object_name,
+                data=data_stream,
+                length=data_length,
+                content_type=content_type
+            )
+            logger.info(f"Uploaded {object_name} ({data_length} bytes)")
+        except S3Error as e:
+            logger.error(f"Error uploading {object_name}: {e}")
+
     def download_file(self, object_name: str, file_path: str) -> bool:
         """Downloads a file to local path."""
         try:

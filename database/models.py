@@ -53,7 +53,6 @@ class Manifest(Base):
     status = Column(SQLEnum(ManifestStatus), default=ManifestStatus.PROCESSING)
     received_at = Column(DateTime, default=datetime.utcnow)
     processed_at = Column(DateTime, nullable=True)
-
     calls = relationship("ManifestCall", back_populates="manifest", cascade="all, delete-orphan")
 
 class ManifestCall(Base):
@@ -71,7 +70,6 @@ class ManifestCall(Base):
     motif_suspension = Column(String, nullable=True)
     nbr_tentatives_appel = Column(Integer, nullable=True)
     conformite_intervalle = Column(String, nullable=True)
-    appels_branch = Column(String, nullable=True)
     nb_tonnalite = Column(Integer, nullable=True)
     high_beeps = Column(Integer, nullable=True)
     classification_modele = Column(String, nullable=True)
@@ -79,7 +77,9 @@ class ManifestCall(Base):
     conformite_IAM = Column(String, nullable=True)
     commentaire = Column(String, nullable=True)
     processed = Column(Boolean, nullable=True)
-
-
-
+    ville = Column(String, nullable=True)
+    nom_prenom = Column(String, nullable=True)
+    line_id = Column(String, nullable=True)
+    conformite_nb_beeps = Column(String, nullable=True)
+    date_appel_technicien=Column(DateTime, nullable=True)
 

@@ -108,20 +108,23 @@ class ManifestProcessor:
                 manifest_type = 'ACQUISITION'
                 category = 'ADSL'
                 df['categorie'] = category
-                df['MDN'] = None
+                df['line_id'] = None
+                df['nom_prenom'] = None
             # Acquisition vuLA csv
             elif 'crc_vula' in filename.lower():
                 df, calls_metadata = self._parse_acquisition(csv_path, processing_date, category='VULA')
                 manifest_type = 'ACQUISITION'
                 category = 'VULA'
                 df['categorie'] = category
-                df['MDN'] = None
                 df['numero_ordre'] = None
+                df['nom_prenom'] = None
             # SAV csv
             elif 'sav' in filename.lower():
                 df, calls_metadata = self._parse_sav(csv_path, processing_date)
                 manifest_type = 'SAV'
                 df['numero_ordre'] = None
+                df['line_id'] = None
+                df['categorie'] = df['categorie'].apply(lambda x: 'VULA' if x == 'ftth' else 'ADSL')
             else:
                 raise ValueError(f"Unsupported file type: {filename}")
             

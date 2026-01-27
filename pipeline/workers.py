@@ -9,9 +9,10 @@ from loguru import logger
 from modules.frequency import FrequencyAnalyzer
 from modules.transcription import Transcriber
 from modules.classification import Classifier
-from modules.types import  ClassificationInput, ComplianceInput, AudioMetadata, ClassificationResult
+from modules.types import  ClassificationInput, ComplianceInput, AudioMetadata, ClassificationResult, AudioSegment
 import json
 import pandas as pd
+import numpy as np
 
 # --- Ingestion Worker ---
 def ingestion_worker(input_queue, segment_queue, assembly_queue, config, ingestion_output_file, metrics=None):
@@ -89,8 +90,14 @@ def ingestion_worker(input_queue, segment_queue, assembly_queue, config, ingesti
                 # 2. Frequency Analysis
                 processing_config = config.get('processing', {})
                 number_high_beeps, number_low_bips, segments = freq_analyzer.process(audio_path, file_id, processing_config)
-                
-                
+                if len(segments) == 0:
+                    segments.append(AudioSegment(
+                         file_id=file_id,
+                         segment_index=0,
+                         audio_data=np.zeros(16000, dtype=np.float32),  # Empty audio array
+                         duration=0.0
+                    ))
+            
                 # 3. Notify Assembler (Start of file)
                 assembly_queue.put({
                     "type": "FILE_INIT",
@@ -363,6 +370,9 @@ def classification_worker(classification_queue, result_queue, config, metrics=No
     worker_name = multiprocessing.current_process().name
     logger.info(f"[{worker_name}] Classification worker started")
     
+    # Check if API is configured
+    api_configured = classifier.api_url is not None
+    
     classifications_completed = 0
     total_classification_time = 0.0
     
@@ -376,13 +386,16 @@ def classification_worker(classification_queue, result_queue, config, metrics=No
             
             classification_start = time.time()
                 
-            # 1. Call AWS Bedrock (Simulated)
-            class_result = classifier.classify_full_text(input_data.full_transcript, input_data.file_id)
-            # class_result = ClassificationResult(
-            #     status="Silence",
-            #     behavior="Bien",
-            #     file_id=input_data.file_id
-            # )
+            # 1. Call AWS Bedrock (Simulated) or use default values if API not set
+            if api_configured:
+                class_result = classifier.classify_full_text(input_data.full_transcript, input_data.file_id)
+            else:
+                # Default values when API is not set
+                class_result = ClassificationResult(
+                    status="Non classifié",
+                    behavior="Non classifié",
+                    file_id=input_data.file_id
+                )
             
             classification_duration = time.time() - classification_start
             

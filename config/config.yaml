@@ -1,5 +1,5 @@
 pipeline:
-  num_ingestion_workers: 32
+  num_ingestion_workers: 32 
   num_classification_workers: 1
   batch_size: 32
   batch_timeout_ms: 100
@@ -9,10 +9,10 @@ processing:
   target_sample_rate: 16000
   chunk_duration_sec: 25
   overlap_sec: 0.5
-  transcription_model: "model/w2v-bert-darija-finetuned-clean-ivr"
+  transcription_model: $HOME/lustre/chatgpt_os-gtcy1ct0blo/shared/control-ivr/asr-control-ivr/w2v-bert-darija-finetuned-clean-ivr
 
 ingestion:
-  input_folder: input/
+  input_folder: /home/mohamed.jarat/lustre/chatgpt_os-gtcy1ct0blo/users/mohamed.jarat/control_ivr/27-01-2026
   
 gpu:
   use_multi_gpu: true
@@ -25,7 +25,7 @@ compliance_rules:
   max_beeps: 5
 
 storage:
-  endpoint: "localhost:5058"
+  endpoint: "10.43.1.4:9092"
   access_key: "admin"
   secret_key: "password123"
   bucket_name: "controle-ivr"
@@ -49,26 +49,32 @@ csv_mappings:
       numero_de_contact: "client_number"
       statut_de_degroupage_iam: motif_suspension
       statut_commande: status_commande
+      nd: "MDN"
+      city: "ville"
+
     VULA:
-      inwib2c_order__c: numero_commande
+      inwib2c_commande_de_partage__c: numero_commande
       createddate: "date_commande"
       lastmodifieddate: "date_suspension"
       inwib2c_numerocontact__c: "client_number"
       inwib2c_statut_demande__c: "status_commande"
       inwib2c_motif__c: "motif_suspension"
-
+      inwib2c_nd_attribut__c: "MDN"
+      inwib2c_city__c: "ville"
+      inwib2c_lineid__c: "line_id"
 
   SAV:
-    "Numéro": "numero_commande"
+    "Number": "numero_commande"
     "ND": MDN
-    "Date envoi IAM": "date_commande"  
+    "Date d'envoi vers l'opérateur d'infra": "date_commande" 
     "Date suspension": "date_suspension"
     "Motif suspension": "motif_suspension"
-    "Catégorie": "categorie"
+    "Category": "categorie"
     "Date réouverture systeme": "date_reouverture_systeme"
     "Date recyclage": "date_recyclage"
-    "Commentaire envoi IAM": "client_number"
-    "Numéro chez l’opérateur d’infrastructure": "numero_operateur_infrastructure"
+    "Commentaire envoi vers opérateur d'infra": "client_number"
+    "Numéro chez l'opérateur d'infra": "Number IAM"
+    "city": "ville"
 
 branche:
   SAV: 
@@ -80,5 +86,58 @@ branche:
 
 
 classification:
-  acquisition: "config/acquisition.txt"
-  sav: "config/sav.txt"
+  ACQUISITION: "config/acquisition.txt"
+  SAV: "config/sav.txt"
+
+email:
+  enabled: false
+  smtp_host: "smtp.office365.com"
+  smtp_port: 587
+  smtp_user: "example@um6p.ma"
+  smtp_password: "smtp_password"
+  sender_email: "example@um6p.ma"
+  recipient_emails:
+    - "example1@inwi.ma"
+    - "example2@inwi.ma"
+
+result_columns:
+  Acquisition:
+    ADSL:
+      processed_at: 'File_date'
+      date_suspension: 'Date de dernier statut'
+      numero_commande: 'N° de commande'
+      numero_ordre: 'N_Ordre'
+      MDN: 'nd'
+      client_number: 'Numero_de_contact'
+      motif_suspension: 'Motif de rejet'
+      ville: 'ville'
+      nbr_tentatives_appel: 'Nbr_tentatives_appel'
+      conformite_nb_appel: 'Conformite_Nb_Appel'
+      nb_tonnalite: 'Nb_tonnalite'
+      conformite_nb_tonnalite: 'Conformite_Nb_Tonalite'
+      conformite_intervalle: 'Conformité Intervalle'
+      conformite_declaratif: 'Conformité_Declaratif'
+      qualite_communication: 'Qualité_communication'
+      conformite_IAM: 'Conformité_IAM'
+      commentaire: 'Commentaire_1'
+    VULA:
+      processed_at: 'Traité le'
+      date_suspension: 'Last'
+      numero_commande: 'InwiB2C_Commande_de_partage__c'
+      line_id: 'ID Ligne'
+      MDN: 'numéro ligne'
+      ville: 'Ville'
+      client_number: 'N de contact'
+      motif_suspension: 'Statut Dégroupage'
+      date_appel_technicien: 'Date_appel_technicien'
+      nbr_tentatives_appel: 'Nbr_tentatives_appel'
+      conformite_nb_appel: 'Conformité_NB_APPEL'
+      nb_tonnalite: 'Nb_tonalité'
+      conformite_nb_tonnalite: 'Conformité_Nb_Tonalité'
+      conformite_intervalle: 'Conformité Délai'
+      conformite_declaratif: 'Conformité_Declaratif'
+      qualite_communication: 'Qualité_communication'
+      conformite_IAM: 'Conformité_IAM'
+      commentaire: 'Commentaire_1'
+
+

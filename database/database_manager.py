@@ -1,10 +1,12 @@
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Tuple
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, desc, asc
+from sqlalchemy import and_, or_, desc, asc, Date, func
 from sqlalchemy.dialects.postgresql import insert
 from .models import Call, Manifest, ManifestStatus, IngestionStatus, ManifestCall, ManifestCallStatus
 from loguru import logger
+import math
+import pandas as pd
 
 def create_call(db: Session, call_data: dict) -> Call:
     """Create a new call record."""
@@ -114,14 +116,132 @@ def bulk_update_manifest_calls(db: Session, manifest_calls_data: List[dict]):
     """Bulk update manifest calls."""
     db.bulk_update_mappings(ManifestCall, manifest_calls_data)
     db.commit()
-    
+
+def clean_value(v):
+    if v is None:
+        return None
+
+    if pd.isna(v):
+        return None
+
+    if isinstance(v, pd.Timestamp):
+        return v.to_pydatetime()
+
+    return v
+
 def bulk_insert_manifest_calls(db: Session, manifest_calls_data: List[dict]):
-    """Bulk insert manifest calls."""
-    
-    db.bulk_insert_mappings(ManifestCall, manifest_calls_data)
+    if not manifest_calls_data:
+        return
+
+    columns = {c.name for c in ManifestCall.__table__.columns}
+    cleaned_data = []
+
+    for row in manifest_calls_data:
+        cleaned_row = {k: clean_value(v) for k, v in row.items()}
+        for col in columns:
+            cleaned_row.setdefault(col, None)
+        cleaned_data.append(cleaned_row)
+
+    stmt = insert(ManifestCall).values(cleaned_data)
+
+    update_dict = {
+        col.name: stmt.excluded[col.name]
+        for col in ManifestCall.__table__.columns
+        if col.name != 'numero_commande'
+    }
+
+    stmt = stmt.on_conflict_do_update(
+        index_elements=['numero_commande'],
+        set_=update_dict
+    )
+
+    db.execute(stmt)
     db.commit()
-    return
+
 
 def get_manifest_call(db: Session, numero_commande: str) -> Optional[ManifestCall]:
     """Get a manifest call by numero_commande."""
     return db.query(ManifestCall).filter(ManifestCall.numero_commande == numero_commande).first()
+
+def get_manifest_types(db: Session, target_date: Union[datetime, str]) -> List[Tuple[str, str]]:
+    """Get a list of unique (category, manifest_filename) tuples for a given date."""
+    if isinstance(target_date, str):
+        target_date = datetime.strptime(target_date, '%Y-%m-%d')
+        
+    return (
+        db.query(
+            ManifestCall.categorie,
+            Manifest.filename,
+            Manifest.id
+        )
+        .join(Manifest, ManifestCall.manifest_id == Manifest.id)
+        .filter(
+            func.date(ManifestCall.date_suspension) == target_date.date(),
+            Manifest.status == ManifestStatus.COMPLETED
+        )
+        .distinct()
+        .all()
+    )
+def get_manifest_calls(db: Session, manifest_id: str, categorie: str) -> List[dict]:
+    """Get a list of serialized manifest calls for a given manifest_id and category."""
+    
+    def serialize_manifest_call(mc: ManifestCall, processed_at) -> dict:
+        motif = (mc.motif_suspension or '').lower()
+        classification = (mc.classification_modele or '').lower()
+        nb_appel = mc.nbr_tentatives_appel or 0
+        nb_tonn = mc.nb_tonnalite or 0
+        
+        # Conformité nb appel logic
+        if motif == 'client injoignable':
+            conformite_nb_appel = 'Conforme' if nb_appel >= 3 else 'Non conforme'
+        else:
+            conformite_nb_appel = 'Conforme' if nb_appel >= 1 else 'Non conforme'
+        # Conformité declaratif logic
+        conformite_declaratif = 'Conforme' if (motif and classification and motif == classification) else 'Non conforme'
+
+        # Convert numeric strings to ensure no float formatting
+        def to_str(val):
+            if val is None:
+                return None
+            if isinstance(val, float):
+                return str(int(val)) if val == int(val) else str(val)
+            return str(val)
+
+        return {
+            "numero_commande": mc.numero_commande,
+            "manifest_id": mc.manifest_id,
+            "MDN": to_str(mc.MDN),
+            "numero_ordre": mc.numero_ordre,
+            "client_number": to_str(mc.client_number),
+            "date_commande": mc.date_commande.date().isoformat() if mc.date_commande else None,
+            "date_suspension": mc.date_suspension.date().isoformat() if mc.date_suspension else None,
+            "categorie": mc.categorie,
+            "motif_suspension": mc.motif_suspension,
+            "date_appel_technicien": mc.date_appel_technicien.date().isoformat() if mc.date_appel_technicien else None,
+            "nbr_tentatives_appel": mc.nbr_tentatives_appel,
+            "conformite_nb_appel": conformite_nb_appel,
+            "conformite_intervalle": mc.conformite_intervalle,
+            "nb_tonnalite": mc.nb_tonnalite,
+            "conformite_nb_tonnalite": mc.conformite_nb_beeps,
+            "high_beeps": mc.high_beeps,
+            "classification_modele": mc.classification_modele,
+            "qualite_communication": mc.qualite_communication,
+            "conformite_IAM": mc.conformite_IAM,
+            "commentaire": mc.commentaire,
+            "processed": mc.processed,
+            "ville": mc.ville,
+            "nom_prenom": mc.nom_prenom,
+            "line_id": to_str(mc.line_id),
+            "conformite_nb_beeps": mc.conformite_nb_beeps,
+            "processed_at": processed_at.date().isoformat() if processed_at else None,
+            "conformite_declaratif": conformite_declaratif,
+        }
+    
+    manifest_calls = (
+        db.query(ManifestCall, Manifest.processed_at)
+        .join(Manifest, ManifestCall.manifest_id == Manifest.id)
+        .filter(ManifestCall.manifest_id == manifest_id, ManifestCall.categorie == categorie)
+        .all()
+    )
+    
+    return [serialize_manifest_call(mc, processed_at) for mc, processed_at in manifest_calls]

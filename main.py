@@ -1,10 +1,12 @@
 import os
+import multiprocessing
 import argparse
 import tempfile
 from contextlib import contextmanager
-from typing import Optional, List
+from typing import Optional, List, Dict, Tuple
 
 import yaml
+import pandas as pd
 from loguru import logger
 
 from database.models import ManifestStatus
@@ -15,7 +17,7 @@ from services.manifest import ManifestProcessor
 from storage.minio_client import MinioStorage
 from datetime import datetime
 from pipeline.metrics import PipelineMetrics
-from database.database_manager import  get_manifest, update_manifest_status
+from database.database_manager import get_manifest, update_manifest_status, get_manifest_types, get_manifest_calls
 import uuid
 from database.models import Manifest
 from datetime import timedelta
@@ -29,6 +31,65 @@ def load_config(config_path: str) -> dict:
     except Exception as e:
         logger.error(f"Failed to load config from {config_path}: {e}")
         raise
+
+
+def get_column_mapping(config: dict, manifest_type: str, category: str) -> Dict[str, str]:
+    """
+    Get the column mapping from config for renaming DataFrame columns.
+    Returns a dict mapping db_column_name -> display_name.
+    
+    Config format: result_columns.<manifest_type>.<category>.<db_column>: <display_name>
+    """
+    result_columns = config.get('result_columns', {})
+    
+    # Normalize manifest type key (config uses 'Acquisition' with capital A)
+    manifest_key = 'Acquisition' if manifest_type == 'ACQUISITION' else manifest_type
+    
+    manifest_config = result_columns.get(manifest_key, {})
+    category_config = manifest_config.get(category, {})
+    
+    if not category_config:
+        logger.warning(f"No column mapping found for {manifest_type}/{category}")
+        return {}
+    
+    # Config format is {db_column: display_name} - use directly
+    column_mapping = {}
+    for db_column, display_name in category_config.items():
+        if display_name:
+            column_mapping[str(db_column)] = str(display_name)
+    
+    return column_mapping
+
+
+def create_result_dataframe(
+    manifest_calls: List[dict],
+    config: dict,
+    manifest_type: str,
+    category: str
+) -> pd.DataFrame:
+    """
+    Create a DataFrame from manifest calls and rename columns based on config.
+    """
+    if not manifest_calls:
+        logger.warning(f"No manifest calls to create DataFrame for {manifest_type}/{category}")
+        return pd.DataFrame()
+    
+    # Create DataFrame from serialized data
+    df = pd.DataFrame(manifest_calls)
+    
+    # Get column mapping and rename
+    column_mapping = get_column_mapping(config, manifest_type, category)
+    
+    if column_mapping:
+        # Only rename columns that exist in the DataFrame and have mappings
+        rename_dict = {db_col: display_name for db_col, display_name in column_mapping.items() if db_col in df.columns}
+        df = df.rename(columns=rename_dict)
+        
+        # Keep only columns from config, in the same order as defined
+        ordered_columns = [display_name for display_name in column_mapping.values() if display_name in df.columns]
+        df = df[ordered_columns]
+    
+    return df
 
 
 def init_minio(config: dict) -> MinioStorage:
@@ -123,7 +184,7 @@ def process_single_manifest(
 
     if len(df_dict) == 0:
         logger.warning(f"No data to be processed for {manifest_file}. Skipping...")
-        update_manifest_status(db, manifest_record.id, ManifestStatus.FAILED)
+        update_manifest_status(db, manifest_record.id, ManifestStatus.PROCESSING)
         return False        # No data processed
     
     logger.info(f"Manifest: {manifest_file} filtered and ready to be processed")
@@ -181,7 +242,6 @@ def process_manifests(config: dict, config_path: str, target_date: str, prefix: 
                 local_path = download_manifest(minio, manifest_file, temp_dir)
                 if not local_path:
                     continue
-
                 try:
                     process_single_manifest(
                         processor=processor,
@@ -191,10 +251,11 @@ def process_manifests(config: dict, config_path: str, target_date: str, prefix: 
                         target_date=target_date,
                         output_base_dir=output_base_dir,
                         db=db
-                    )
-            
+                    )                        
                 except Exception as e:
                     logger.error(f"Error processing {manifest_file}: {e}")
+            return True
+    return False
 
 def run_ingestion(config: dict, input_folder: str = None):
     """Run ingestion of the Minio bucket and index the calls in the database."""
@@ -211,6 +272,11 @@ def run_ingestion(config: dict, input_folder: str = None):
 
 
 def main():
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
+        
     parser = argparse.ArgumentParser(description="Audio Compliance Verification Pipeline")
     parser.add_argument(
         "--config",
@@ -240,10 +306,53 @@ def main():
         # this for indexing the calls in the database json files
         run_ingestion(config, input_folder= input)
 
-    # date = '2025-11-19'
-    date = datetime.now() - timedelta(days=1)
-    date = date.strftime('%Y-%m-%d')
-    process_manifests(config, args.config, date, prefix=args.prefix)
-
+    date = '2026-01-25'
+    # date = datetime.now() - timedelta(days=1)
+    # date = date.strftime('%Y-%m-%d')
+    
+    if process_manifests(config, args.config, date, prefix=args.prefix):
+        output_dir = f"output/{date}"
+        
+        result_dataframes: List[Tuple[str, str, pd.DataFrame]] = []
+        
+        with get_db_session() as db:
+            res = get_manifest_types(db, date)
+            
+            for categorie, filename, manifest_id in res:
+                # Determine manifest type based on filename
+                if 'crc_adsl' in filename.lower() or 'crc_vula' in filename.lower():
+                    manifest_type = 'ACQUISITION'
+                else:
+                    manifest_type = 'SAV'
+                logger.info(f"filename: {filename}, Manifest type: {manifest_type}, categorie: {categorie}")
+                # Get manifest calls and create DataFrame
+                manifest_calls = get_manifest_calls(db, manifest_id, categorie)
+                
+                if not manifest_calls:
+                    logger.warning(f"No calls found for manifest_id={manifest_id}, categorie={categorie}")
+                    continue
+                
+                # Create DataFrame with renamed columns
+                df = create_result_dataframe(manifest_calls, config, manifest_type, categorie)
+                
+                if not df.empty:
+                    result_dataframes.append((manifest_type, categorie, df))
+                    logger.info(f"Created DataFrame for {manifest_type}/{categorie} with {len(df)} rows")
+        
+        # Save DataFrames to Minio
+        minio = init_minio(config)
+        for manifest_type, categorie, df in result_dataframes:
+            object_name = f"{output_dir}/{manifest_type}_{categorie}_{date}.csv"
+            csv_data = df.to_csv(index=False).encode('utf-8')
+            # Save results locally as well
+            local_output_dir = f"{output_dir}"
+            os.makedirs(local_output_dir, exist_ok=True)
+            local_csv_path = os.path.join(local_output_dir, f"{manifest_type}_{categorie}_{date}.csv")
+            with open(local_csv_path, "wb") as f:
+                f.write(csv_data)
+            logger.info(f"Saved results locally: {local_csv_path}")
+            minio.upload_bytes(csv_data, object_name, content_type="text/csv")
+            logger.info(f"Saved results to Minio: {object_name}")
+                
 if __name__ == "__main__":
     main()

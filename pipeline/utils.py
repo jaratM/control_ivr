@@ -2,6 +2,7 @@ import sys
 from loguru import logger
 import time
 
+
 def setup_logging(config):
     logger.remove()
     logger.add(sys.stderr, level=config['logging']['level'])

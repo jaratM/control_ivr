@@ -13,7 +13,8 @@ from modules.compliance import ComplianceVerifier
 from datetime import datetime
 from database.database_manager import get_manifest_call, bulk_insert_manifest_calls
 import torch
-
+from services.email_service import EmailService
+# from modules.results import ComplianceResults
 class PipelineOrchestrator:
     def __init__(self, config_path: str):
         with open(config_path, 'r') as f:
@@ -22,6 +23,8 @@ class PipelineOrchestrator:
         setup_logging(self.config)
         self.manager = multiprocessing.Manager()
         self.verifier = ComplianceVerifier()
+        self.email_service = EmailService(self.config)
+        # self.compliance_results = ComplianceResults(self.config) 
         
     def run(self, df_dict: List[dict], calls_metadata: List, manifest_type: str, category: str, output_path: str, metrics: PipelineMetrics, db: Session):
         """
@@ -44,7 +47,7 @@ class PipelineOrchestrator:
         
         # Initialize metrics tracking
         
-        df_dict = self.verifier.verify_compliance(df_dict, calls_metadata, category, manifest_type, self.config)
+        # df_dict = self.verifier.verify_compliance(df_dict, calls_metadata, category, manifest_type, self.config)
         # compliance_df = pd.DataFrame(df_dict)
         # logger.info(f"Saving compliance dataframe to {output_path}compliance_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
         # compliance_df.to_csv(f"{output_path}/compliance_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", index=False)
@@ -62,6 +65,9 @@ class PipelineOrchestrator:
                 for call in calls_metadata[i]:
                     path_queue.put(call)
                     counter += 1
+            else:
+                df_dict[i]['status'] = 'Non Conforme'
+                df_dict[i]['commentaire'] = 'Aucun appel trouvé'
         
         metrics.increment("files_queued", counter)
         logger.info(f"Adding {counter} calls to path queue")
@@ -98,8 +104,10 @@ class PipelineOrchestrator:
         batcher.start()
         
         # GPU Workers
-        if self.config['gpu']['use_multi_gpu']:
-            num_gpus = torch.cuda.device_count()
+        num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        if not self.config['gpu'].get('use_multi_gpu', False) and num_gpus > 0:
+            num_gpus = 1
+            
         gpu_worker_count = num_gpus if num_gpus > 0 else 1
         device_list = list(range(num_gpus)) if num_gpus > 0 else ["cpu"]
         
@@ -129,7 +137,7 @@ class PipelineOrchestrator:
         for i in range(num_classifiers):
             p = multiprocessing.Process(
                 target=classification_worker,
-                args=(classification_queue, result_queue, self.config, metrics, category),
+                args=(classification_queue, result_queue, self.config, metrics, manifest_type),
                 name=f"Classifier-{i}"
             )
             p.start()
@@ -174,16 +182,9 @@ class PipelineOrchestrator:
         compliance_list = self.verifier.verify_compliance_batch(df_dict, results)
         logger.info(f"Pipeline finished. Generated {len(results)} results.")
         
-        # Convert list of dicts to DataFrame for CSV export
-        compliance_df = pd.DataFrame(compliance_list)
-               
         # Bulk upsert all manifest calls (handles both new and existing records)
         logger.info(f"Upserting {len(compliance_list)} manifest calls")
+        logger.debug(f'{compliance_list}')
         bulk_insert_manifest_calls(db, compliance_list)
-
-        # Drop 'processed' and 'manifest_id' columns if they exist
-        compliance_df = compliance_df.drop(columns=[col for col in ['processed', 'manifest_id', 'high_beeps'] if col in compliance_df.columns])
-
-        compliance_df.to_csv(f"{output_path}/result_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", index=False)
-        logger.info(f"Saving compliance dataframe to {output_path}result_df_{manifest_type}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        
         return metrics

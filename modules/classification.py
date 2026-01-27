@@ -27,11 +27,13 @@ class Classifier:
         6: "Client Absent",
         7: "Absence routeur client",
         8: "local ferme",
+        9: "Non classifié"
     }
     
     TECHNICIAN_BEHAVIOR_MAP = {
         1: "Bien",
-        0: "Mauvais"
+        0: "Mauvais",
+        2: "Non classifié"
     }
 
     def __init__(
@@ -56,12 +58,13 @@ class Classifier:
                 logger.warning("[Classifier] BEDROCK_API_URL or BEDROCK_API_ID not set in environment.")
 
         if self.log:
-            logger.info(f"\n[Classifier] Initialized (API Mode)")
+            logger.info(f"\n[Classifier] Initialized (API Mode) for {category}")
         
         # Load prompt from external file
         try:
             config_classification = self.config.get('classification', {}) if self.config else {}
             prompt_file = config_classification.get(category, 'config/sav.txt')
+            logger.info(f"[Classifier] config_classification: {config_classification}, prompt_file: {prompt_file}")
             with open(prompt_file, "r", encoding="utf-8") as f:
                 self.system_prompt = f.read().strip()
             if self.log:
@@ -93,7 +96,7 @@ class Classifier:
                 if self.log:
                     logger.error(f"Classification error: {str(e)}")
                 # Default to (Other, Good Behavior) on error
-                return self._make_result(4, 1, file_id)
+                return self._make_result(9, 2, file_id)
 
     def _make_result(self, call_type: int, tech_behavior: int, file_id: str) -> Dict:
             """Helper to build the result dictionary with both classification digits."""
