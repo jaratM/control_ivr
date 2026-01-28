@@ -9,10 +9,10 @@ processing:
   target_sample_rate: 16000
   chunk_duration_sec: 25
   overlap_sec: 0.5
-  transcription_model: $HOME/lustre/chatgpt_os-gtcy1ct0blo/shared/control-ivr/asr-control-ivr/w2v-bert-darija-finetuned-clean-ivr
+  transcription_model: "model/w2v-bert-darija-finetuned-clean-ivr"
 
 ingestion:
-  input_folder: /home/mohamed.jarat/lustre/chatgpt_os-gtcy1ct0blo/users/mohamed.jarat/control_ivr/27-01-2026
+  input_folder: input/
   
 gpu:
   use_multi_gpu: true
@@ -25,7 +25,7 @@ compliance_rules:
   max_beeps: 5
 
 storage:
-  endpoint: "10.43.1.4:9092"
+  endpoint: "localhost:5058"
   access_key: "admin"
   secret_key: "password123"
   bucket_name: "controle-ivr"
@@ -72,9 +72,11 @@ csv_mappings:
     "Category": "categorie"
     "Date réouverture systeme": "date_reouverture_systeme"
     "Date recyclage": "date_recyclage"
-    "Commentaire envoi vers opérateur d'infra": "client_number"
-    "Numéro chez l'opérateur d'infra": "Number IAM"
+    "Commentaire envoi vers opérateur d'infra": "contact"
+    "Numéro chez l'opérateur d'infra": "numero_ordre"
     "city": "ville"
+    "nom_prenom": "nom_prenom"
+    "client_number": "client_number"
 
 branche:
   SAV: 
@@ -139,5 +141,44 @@ result_columns:
       qualite_communication: 'Qualité_communication'
       conformite_IAM: 'Conformité_IAM'
       commentaire: 'Commentaire_1'
+  SAV:
+    ADSL:
+      date_suspension: 'Date et heure suspension IAM'
+      processed: 'ETAT'
+      processed_at: 'Date traitement'
+      client_number: 'N° de contact'
+      MDN: 'MDN'
+      nom_prenom: 'Nom'
+      numero_ordre: 'Number IAM'
+      motif_suspension: 'Motif de suspension'
+      date_appel_technicien: "Date d'appel technicien"
+      nbr_tentatives_appel: 'Nbr d appel'
+      conformite_nb_tonnalite: 'Tonalités 5'
+      conformite_joignabilite_client: 'Joignabilité client'
+      sous_resultat: 'Sous Résultat'
+      qualite_communication: 'Qualité de communication'
+      conformite_nb_appel: 'NC Appel'
+      conformite_declaratif: 'NC Déclaratif'
+      conformite_IAM: 'Conformité'
+      commentaire: 'Commentaire'
+      ville: 'Ville'
+    VULA:
+      date_suspension: 'Date de Suspension'
+      client_number: 'N° de contact'
+      MDN: 'MDN'
+      nom_prenom: 'Nom & prénom'
+      numero_ordre: 'Number IAM'
+      motif_suspension: 'Motif de suspension'
+      date_appel_technicien: "Date d'appel technicien"
+      nbr_tentatives_appel: 'Nbr d appel'
+      conformite_nb_tonnalite: 'Tonalités 5'
+      conformite_joignabilite_client: 'Joignabilité client'
+      qualite_communication: 'Qualité de communication'
+      conformite_nb_appel: 'NC Appel'
+      conformite_declaratif: 'NC déclaratif'
+      conformite_IAM: 'Conformité IAM'
+      commentaire: 'Commentaire'
+      ville: 'Ville'
+
 
 

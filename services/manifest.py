@@ -3,7 +3,7 @@ from unicodedata import category
 import pandas as pd
 import re
 from datetime import datetime
-from typing import List, Optional, Tuple, Union
+from typing import List, NamedTuple, Optional, Tuple, Union
 from sqlalchemy.orm import Session
 from loguru import logger
 from database.models import Call, Manifest, ManifestStatus, ManifestCall
@@ -89,6 +89,152 @@ def normalize_phone_number(phone: str) -> Optional[str]:
     return phone
 
 
+
+def extract_contact_name(comment: str) -> Optional[str]:
+    """
+    Extract client name (nom_prenom) from commentaire_envoi_iam column.
+    
+    Handles various formats:
+    - Nom et prénom :HADIR MUSTAPHA Numéro...
+    - *Nom et prénom client : ALI BOKADDA *Numéro...
+    - Nom client :HANANE JABER Numéro...
+    - Nom & prénom : ABDERRAZAK MOUKRIM Numéro...
+    - ABDELHAK NAJI Numéro de contact : 212... (name at start without label)
+    - numéro de contact : 212704356193 SAID AMAST (name at end after phone)
+    - N° de contact :212630192253 YASMINA KORAICHI (name at end after phone)
+    
+    Returns:
+        The extracted name or None if not found.
+    """
+    if not comment or not isinstance(comment, str):
+        return None
+    
+    comment = comment.strip()
+    
+    # Strategy 1: Try to find name after a label (Nom...:)
+    name = _extract_name_after_label(comment)
+    if name:
+        return name
+    
+    # Strategy 2: Try to find name before phone number pattern (name at start)
+    name = _extract_name_before_phone(comment)
+    if name:
+        return name
+    
+    # Strategy 3: Try to find name after phone number (name at end)
+    name = _extract_name_after_phone(comment)
+    if name:
+        return name
+    
+    return None
+
+
+def _extract_name_after_label(comment: str) -> Optional[str]:
+    """Extract name that appears after a label like 'Nom et prénom :'"""
+    # Pattern to match various name label formats
+    name_label_pattern = r'\*?\s*Nom\s*(?:et\s+prénom|&\s*prénom|client)?(?:\s+client)?\s*:\s*'
+    
+    # Patterns that indicate the end of the name field
+    end_patterns = [
+        r'\*?\s*Numéro',      # "Numéro de la ligne", "*Numéro de contact", etc.
+        r'\*?\s*N°',          # "N° de contact"
+        r'\*?\s*Tel',         # "Tel:", "Téléphone"
+        r'\*?\s*numéro',      # lowercase "numéro"
+    ]
+    end_pattern = '|'.join(end_patterns)
+    
+    label_match = re.search(name_label_pattern, comment, re.IGNORECASE)
+    if not label_match:
+        return None
+    
+    text_after_label = comment[label_match.end():]
+    end_match = re.search(end_pattern, text_after_label, re.IGNORECASE)
+    
+    if end_match:
+        name = text_after_label[:end_match.start()].strip()
+    else:
+        name = text_after_label.strip()
+        # If there's a lot of text, cut at first phone number
+        if len(name) > 50:
+            num_match = re.search(r'\d{3,}', name)
+            if num_match:
+                name = name[:num_match.start()].strip()
+    
+    return _clean_and_validate_name(name)
+
+
+def _extract_name_before_phone(comment: str) -> Optional[str]:
+    """Extract name that appears at the start, before any phone-related text."""
+    # Pattern: text at start followed by phone-related keywords
+    # e.g., "ABDELHAK NAJI Numéro de contact : 212..."
+    phone_keyword_pattern = r'(?:\*?\s*(?:Numéro|N°|numéro)\s*(?:de\s+)?(?:contact|ligne|la\s+ligne)?e?\s*:)'
+    
+    match = re.search(phone_keyword_pattern, comment, re.IGNORECASE)
+    if not match:
+        return None
+    
+    # Get text before the phone keyword
+    text_before = comment[:match.start()].strip()
+    
+    # Remove any leading asterisks or special chars
+    text_before = re.sub(r'^[\*\s]+', '', text_before)
+    
+    # Check if this looks like a name (alphabetic characters, no phone numbers)
+    if text_before and not re.search(r'\d{6,}', text_before):
+        return _clean_and_validate_name(text_before)
+    
+    return None
+
+
+def _extract_name_after_phone(comment: str) -> Optional[str]:
+    """Extract name that appears after a phone number at the end."""
+    # Pattern: phone number followed by name at end
+    # e.g., "N° de contact :212630192253 YASMINA KORAICHI"
+    # e.g., "numéro de contact : 212704356193 SAID AMAST"
+    
+    # Find phone numbers (10-12 digits)
+    phone_pattern = r'(?:212[67]\d{8}|0[67]\d{8})'
+    
+    matches = list(re.finditer(phone_pattern, comment))
+    if not matches:
+        return None
+    
+    # Get text after the last phone number
+    last_match = matches[-1]
+    text_after = comment[last_match.end():].strip()
+    
+    # Clean up: remove leading punctuation, whitespace
+    text_after = re.sub(r'^[\s\*\:\-]+', '', text_after)
+    
+    # Check if remaining text looks like a name
+    if text_after and not re.search(r'\d{6,}', text_after):
+        return _clean_and_validate_name(text_after)
+    
+    return None
+
+
+def _clean_and_validate_name(name: str) -> Optional[str]:
+    """Clean up and validate extracted name."""
+    if not name:
+        return None
+    
+    # Remove trailing punctuation or extra whitespace
+    name = re.sub(r'[\*\:\-\,\.]+$', '', name).strip()
+    
+    # Remove leading punctuation
+    name = re.sub(r'^[\*\:\-\,\.]+', '', name).strip()
+    
+    # Validate: name should contain at least some alphabetic characters
+    # and should be reasonable length (2-60 chars)
+    if name and 2 <= len(name) <= 60 and re.search(r'[A-Za-zÀ-ÿ]{2,}', name):
+        return name
+    
+    return None
+
+
+
+
+
 class ManifestProcessor:
     def __init__(self, db_session: Session, config: dict):
         self.db = db_session
@@ -122,7 +268,7 @@ class ManifestProcessor:
             elif 'sav' in filename.lower():
                 df, calls_metadata = self._parse_sav(csv_path, processing_date)
                 manifest_type = 'SAV'
-                df['numero_ordre'] = None
+                # df['numero_ordre'] = None
                 df['line_id'] = None
                 df['categorie'] = df['categorie'].apply(lambda x: 'VULA' if x == 'ftth' else 'ADSL')
             else:
@@ -223,9 +369,12 @@ class ManifestProcessor:
         # Filter by suspension status
         df = self._filter_sav_status(df, date_suspension)
         logger.info(f"Processing SAV: Rows after SAV status filter: {len(df)}\n")
+
+        # Extract name and phone from the contact/comment field
+        df["client_number"] = df["contact"].apply(extract_contact_phone)
+        df["nom_prenom"] = df["contact"].apply(extract_contact_name)
+        df = df.drop(columns=["contact"], errors='ignore')
         
-        # Extract contact phone from comments
-        df["client_number"] = df["client_number"].apply(extract_contact_phone)
         df = df.dropna(subset=["client_number"])
         logger.info(f"Processing SAV: Rows with valid extracted phone: {len(df)}\n")
         

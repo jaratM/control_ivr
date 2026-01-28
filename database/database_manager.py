@@ -228,13 +228,15 @@ def get_manifest_calls(db: Session, manifest_id: str, categorie: str) -> List[di
             "qualite_communication": mc.qualite_communication,
             "conformite_IAM": mc.conformite_IAM,
             "commentaire": mc.commentaire,
-            "processed": mc.processed,
+            "processed": 'Traité' if mc.processed else '',
             "ville": mc.ville,
             "nom_prenom": mc.nom_prenom,
+            "sous_resultat": "",
             "line_id": to_str(mc.line_id),
             "conformite_nb_beeps": mc.conformite_nb_beeps,
             "processed_at": processed_at.date().isoformat() if processed_at else None,
             "conformite_declaratif": conformite_declaratif,
+            "conformite_joignabilite_client": 'Oui' if conformite_nb_appel == 'Conforme' else 'Non',
         }
     
     manifest_calls = (
