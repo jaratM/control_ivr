@@ -137,7 +137,8 @@ def bulk_insert_manifest_calls(db: Session, manifest_calls_data: List[dict]):
     cleaned_data = []
 
     for row in manifest_calls_data:
-        cleaned_row = {k: clean_value(v) for k, v in row.items()}
+        # cleaned_row = {k: clean_value(v) for k, v in row.items()}
+        cleaned_row = {k: clean_value(v) for k, v in row.items() if k in columns}
         for col in columns:
             cleaned_row.setdefault(col, None)
         cleaned_data.append(cleaned_row)
@@ -205,6 +206,14 @@ def get_manifest_calls(db: Session, manifest_id: str, categorie: str) -> List[di
                 return None
             if isinstance(val, float):
                 return str(int(val)) if val == int(val) else str(val)
+            # Handle strings that look like floats (e.g., "538988772.0")
+            if isinstance(val, str) and '.' in val:
+                try:
+                    float_val = float(val)
+                    if float_val == int(float_val):
+                        return str(int(float_val))
+                except (ValueError, OverflowError):
+                    pass
             return str(val)
 
         return {
@@ -225,10 +234,10 @@ def get_manifest_calls(db: Session, manifest_id: str, categorie: str) -> List[di
             "conformite_nb_tonnalite": mc.conformite_nb_beeps,
             "high_beeps": mc.high_beeps,
             "classification_modele": mc.classification_modele,
-            "qualite_communication": mc.qualite_communication,
+            "qualite_communication": mc.qualite_communication if mc.motif_suspension != 'client injoignable' else '',
             "conformite_IAM": mc.conformite_IAM,
             "commentaire": mc.commentaire,
-            "processed": 'Traité' if mc.processed else '',
+            "processed": 'Traité',
             "ville": mc.ville,
             "nom_prenom": mc.nom_prenom,
             "sous_resultat": "",

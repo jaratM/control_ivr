@@ -13,6 +13,7 @@ from modules.types import  ClassificationInput, ComplianceInput, AudioMetadata, 
 import json
 import pandas as pd
 import numpy as np
+from .utils import setup_logging
 
 # --- Ingestion Worker ---
 def ingestion_worker(input_queue, segment_queue, assembly_queue, config, ingestion_output_file, metrics=None):
@@ -25,6 +26,7 @@ def ingestion_worker(input_queue, segment_queue, assembly_queue, config, ingesti
     - Send the segments to the batcher
     - Save the ingestion output to a file
     """
+    setup_logging(config, log_file_path=config.get('_log_file_path'))
     freq_analyzer = FrequencyAnalyzer()
     worker_name = multiprocessing.current_process().name
     logger.info(f"[{worker_name}] Ingestion worker started")
@@ -145,6 +147,7 @@ def ingestion_worker(input_queue, segment_queue, assembly_queue, config, ingesti
 
 # --- Batcher Worker ---
 def batcher_worker(segment_queue, transcription_queue, config, metrics=None):
+    setup_logging(config, log_file_path=config.get('_log_file_path'))
     batch_size = config['pipeline']['batch_size']
     timeout = config['pipeline']['batch_timeout_ms'] / 1000.0
     
@@ -202,6 +205,7 @@ def batcher_worker(segment_queue, transcription_queue, config, metrics=None):
                 
 # --- GPU Worker ---
 def gpu_worker(transcription_queue, assembly_queue, config, gpu_id, metrics=None):
+    setup_logging(config, log_file_path=config.get('_log_file_path'))
     # Initialize Models on specific GPU
     worker_name = multiprocessing.current_process().name
     
@@ -265,6 +269,7 @@ def gpu_worker(transcription_queue, assembly_queue, config, gpu_id, metrics=None
 
 # --- Assembler Worker ---
 def assembler_worker(assembly_queue, classification_queue, config, assembler_output_file, metrics=None):
+    setup_logging(config, log_file_path=config.get('_log_file_path'))
     # State: file_id -> { metadata, beep_count, total_segments, received_count, text_segments: {index: text}, start_time }
     state_store = {}
     assemblies_completed = 0
@@ -363,6 +368,7 @@ def assembler_worker(assembly_queue, classification_queue, config, assembler_out
 
 # --- Classification & Compliance Worker ---
 def classification_worker(classification_queue, result_queue, config, metrics=None, category: str = 'sav'):
+    setup_logging(config, log_file_path=config.get('_log_file_path'))
     # This worker calls AWS Bedrock (simulated)
     # It should be run in multiple threads/processes to handle I/O latency
     classifier = Classifier(category=category,config=config) # API Client

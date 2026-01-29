@@ -412,7 +412,7 @@ class ComplianceVerifier:
                 row['high_beeps'] = None
                 row['classification_modele'] = row.get('classification_modele', '')
                 row['qualite_communication'] = row.get('qualite_communication', '')
-                row['processed'] = False
+                row['processed'] = True
                 updated_df_list.append(row)
         return updated_df_list
 

@@ -20,7 +20,9 @@ class PipelineOrchestrator:
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
             
-        setup_logging(self.config)
+        # Setup logging and store the log file path for workers
+        log_file_path = setup_logging(self.config)
+        self.config['_log_file_path'] = log_file_path
         self.manager = multiprocessing.Manager()
         self.verifier = ComplianceVerifier()
         self.email_service = EmailService(self.config)
@@ -66,7 +68,7 @@ class PipelineOrchestrator:
                     path_queue.put(call)
                     counter += 1
             else:
-                df_dict[i]['status'] = 'Non Conforme'
+                df_dict[i]['conformite_IAM'] = 'Non Conforme'
                 df_dict[i]['commentaire'] = 'Aucun appel trouvé'
         
         metrics.increment("files_queued", counter)
