@@ -306,9 +306,9 @@ def main():
         # this for indexing the calls in the database json files
         run_ingestion(config, input_folder= input)
 
-    date = '2026-01-25'
-    # date = datetime.now() - timedelta(days=1)
-    # date = date.strftime('%Y-%m-%d')
+    # date = '2026-01-28'
+    date = datetime.now() - timedelta(days=1)
+    date = date.strftime('%Y-%m-%d')
     
     if process_manifests(config, args.config, date, prefix=args.prefix):
         output_dir = f"output/{date}"

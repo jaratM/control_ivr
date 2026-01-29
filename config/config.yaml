@@ -9,7 +9,7 @@ processing:
   target_sample_rate: 16000
   chunk_duration_sec: 25
   overlap_sec: 0.5
-  transcription_model: "model/w2v-bert-darija-finetuned-clean-ivr"
+  transcription_model: "models/w2v-bert-darija-finetuned-clean-ivr"
 
 ingestion:
   input_folder: input/
