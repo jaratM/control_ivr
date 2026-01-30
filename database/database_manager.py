@@ -186,19 +186,27 @@ def get_manifest_types(db: Session, target_date: Union[datetime, str]) -> List[T
 def get_manifest_calls(db: Session, manifest_id: str, categorie: str) -> List[dict]:
     """Get a list of serialized manifest calls for a given manifest_id and category."""
     
-    def serialize_manifest_call(mc: ManifestCall, processed_at) -> dict:
+    def serialize_manifest_call(mc: ManifestCall, processed_at, filename) -> dict:
         motif = (mc.motif_suspension or '').lower()
         classification = (mc.classification_modele or '').lower()
         nb_appel = mc.nbr_tentatives_appel or 0
-        nb_tonn = mc.nb_tonnalite or 0
-        
+        manifest_type = 'sav' if 'sav' in filename.lower() else 'acquisition'     
         # Conformité nb appel logic
-        if motif == 'client injoignable':
-            conformite_nb_appel = 'Conforme' if nb_appel >= 3 else 'Non conforme'
+        if manifest_type == 'acquisition':
+            if motif == 'client injoignable':
+                conformite_nb_appel = 'Conforme' if nb_appel >= 3 else 'Non conforme'
+            else:
+                conformite_nb_appel = 'Conforme' if nb_appel >= 1 else 'Non conforme'
         else:
-            conformite_nb_appel = 'Conforme' if nb_appel >= 1 else 'Non conforme'
+            if motif == 'client injoignable':
+                conformite_nb_appel = 'Conforme' if nb_appel >= 3 else nb_appel
+            else:
+                conformite_nb_appel = 'Conforme' if nb_appel >= 1 else nb_appel
         # Conformité declaratif logic
         conformite_declaratif = 'Conforme' if (motif and classification and motif == classification) else 'Non conforme'
+
+        # Conformité joignabilite client logic
+        conformite_joignabilite_client = 'NA' if (nb_appel == 0) else 'Oui' if (classification != 'client injoignable') else 'Non'
 
         # Convert numeric strings to ensure no float formatting
         def to_str(val):
@@ -234,7 +242,7 @@ def get_manifest_calls(db: Session, manifest_id: str, categorie: str) -> List[di
             "conformite_nb_tonnalite": mc.conformite_nb_beeps,
             "high_beeps": mc.high_beeps,
             "classification_modele": mc.classification_modele,
-            "qualite_communication": mc.qualite_communication if mc.motif_suspension != 'client injoignable' else '',
+            "qualite_communication": mc.qualite_communication if mc.motif_suspension.lower() != 'client injoignable' else '',
             "conformite_IAM": mc.conformite_IAM,
             "commentaire": mc.commentaire,
             "processed": 'Traité',
@@ -245,14 +253,14 @@ def get_manifest_calls(db: Session, manifest_id: str, categorie: str) -> List[di
             "conformite_nb_beeps": mc.conformite_nb_beeps,
             "processed_at": processed_at.date().isoformat() if processed_at else None,
             "conformite_declaratif": conformite_declaratif,
-            "conformite_joignabilite_client": 'Oui' if conformite_nb_appel == 'Conforme' else 'Non',
+            "conformite_joignabilite_client": conformite_joignabilite_client
         }
     
     manifest_calls = (
-        db.query(ManifestCall, Manifest.processed_at)
+        db.query(ManifestCall, Manifest.processed_at, Manifest.filename)
         .join(Manifest, ManifestCall.manifest_id == Manifest.id)
         .filter(ManifestCall.manifest_id == manifest_id, ManifestCall.categorie == categorie)
         .all()
     )
     
-    return [serialize_manifest_call(mc, processed_at) for mc, processed_at in manifest_calls]
+    return [serialize_manifest_call(mc, processed_at, filename) for mc, processed_at, filename in manifest_calls]

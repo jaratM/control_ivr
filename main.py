@@ -2,6 +2,7 @@ import os
 import multiprocessing
 import argparse
 import tempfile
+from io import BytesIO
 from contextlib import contextmanager
 from typing import Optional, List, Dict, Tuple
 
@@ -306,7 +307,7 @@ def main():
         # this for indexing the calls in the database json files
         run_ingestion(config, input_folder= input)
 
-    # date = '2026-01-28'
+    # date = '2026-01-25'
     date = datetime.now() - timedelta(days=1)
     date = date.strftime('%Y-%m-%d')
     
@@ -342,16 +343,22 @@ def main():
         # Save DataFrames to Minio
         minio = init_minio(config)
         for manifest_type, categorie, df in result_dataframes:
-            object_name = f"{output_dir}/{manifest_type}_{categorie}_{date}.csv"
-            csv_data = df.to_csv(index=False).encode('utf-8')
+            object_name = f"{output_dir}/{manifest_type}_{categorie}_{date}.xlsx"
+            
+            # Write Excel to BytesIO buffer
+            excel_buffer = BytesIO()
+            df.to_excel(excel_buffer, index=False, engine='openpyxl',)
+            excel_data = excel_buffer.getvalue()
+            
             # Save results locally as well
             local_output_dir = f"{output_dir}"
             os.makedirs(local_output_dir, exist_ok=True)
-            local_csv_path = os.path.join(local_output_dir, f"{manifest_type}_{categorie}_{date}.csv")
-            with open(local_csv_path, "wb") as f:
-                f.write(csv_data)
-            logger.info(f"Saved results locally: {local_csv_path}")
-            minio.upload_bytes(csv_data, object_name, content_type="text/csv")
+            local_excel_path = os.path.join(local_output_dir, f"{manifest_type}_{categorie}_{date}.xlsx")
+            with open(local_excel_path, "wb") as f:
+                f.write(excel_data)
+            logger.info(f"Saved results locally: {local_excel_path}")
+            
+            minio.upload_bytes(excel_data, object_name, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             logger.info(f"Saved results to Minio: {object_name}")
                 
 if __name__ == "__main__":

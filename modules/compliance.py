@@ -19,24 +19,8 @@ class ComplianceVerifier:
     MIN_ATTEMPTS = 3
     MIN_GAP_SECONDS = 7200 # 2 hours
 
-        # Default values for beep analysis
-    DEFAULT_BEEP_COUNT = 100
-    DEFAULT_HIGH_BEEPS = 100
     MOTIF_INJOIGNABLE = 'client injoignable'
 
-    # def _parse_start_time(self, call: Dict) -> datetime:
-    #     """Helper to parse start_time (handles both datetime objects and ISO strings from serialization)"""
-    #     st = call.get('start_time')
-    #     if st is None:
-    #         return datetime.min
-    #     if isinstance(st, datetime):
-    #         return st
-    #     if isinstance(st, str):
-    #         try:
-    #             return datetime.fromisoformat(st)
-    #         except ValueError:
-    #             return datetime.min
-    #     return datetime.min
 
     def _parse_date_value(self, value: Any) -> datetime:
         """Parse a date value that could be datetime, Timestamp, or string"""
@@ -53,106 +37,6 @@ class ComplianceVerifier:
                 return datetime.min
         return datetime.min
 
-
-    # def _verify_row(self, row: dict, calls: List[Any], category: str, manifest_type: str, config: dict) -> Dict[str, str]:
-    #     """Verify compliance for a single row"""
-    #     is_compliant = self.STATUS_CONFORM
-    #     is_dispatched = self.STATUS_CONFORM
-    #     # is_branch_calls = self.STATUS_CONFORM
-    #     comments = []
- 
-    #     count = row.get('nbr_tentatives_appel', 0)
-    #     date_commande = row.get('date_commande', '')
-    #     date_commande = self._parse_date_value(date_commande)
-
-    #     if manifest_type == self.MANIFEST_SAV:
-    #         category = row.get('categorie', 'ADSL')
-
-    #     # 1. Basic check: if no attempts recorded
-    #     if count == 0:
-    #         comments.append("Aucun appel trouvé")
-    #         return {
-    #             'conformite_intervalle': '',
-    #             # 'appels_branch': '',
-    #             'conformite_IAM': self.STATUS_NON_CONFORM,
-    #             'commentaire': " ".join(comments)
-    #         }
-
-    #     # Sort calls by start time
-    #     # The first in the list is the oldest, so use calls as-is.
-    #     sorted_calls = calls
-
-    #     # 2. Branch Verification
-    #     # target_branch = config.get('branche', {}).get(manifest_type, {}).get(category)
-        
-    #     # if target_branch is None:
-    #         # Configuration missing for this manifest_type/category - skip branch check
-    #         # pass
-    #     # else:
-    #         # for call in sorted_calls:
-    #         #     if call.get('branch') != target_branch:
-    #         #         is_compliant = self.STATUS_NON_CONFORM
-    #         #         is_branch_calls = self.STATUS_NON_CONFORM
-    #         #         comments.append("Branche non conforme, ")
-    #         #         break
-
-    #     # 3. Client Unreachable Logic
-    #     status = str(row.get('motif_suspension', '')).strip()
-    #     if status.lower() == self.CLIENT_UNREACHABLE:
-    #         # Check 3a: Minimum number of attempts
-    #         if count < self.MIN_ATTEMPTS:
-    #             # Only check call time if we have calls to check
-    #             if sorted_calls:
-    #                 call_time = self._parse_start_time(sorted_calls[0])
-    #                 # Last call must be after 5pm (17:00) to be compliant
-    #                 if date_commande.hour > 17 and call_time.hour > 17 and date_commande.date() == call_time.date():
-    #                     comments.append("Dernier appel effectué apres 17h")
-    #                 else:
-    #                     is_compliant = self.STATUS_NON_CONFORM
-    #                     comments.append(f"Moins de {self.MIN_ATTEMPTS} appels trouvés")
-
-
-    #         # Check 3b: Time gap between consecutive calls
-    #         is_conforme = False
-
-    #         if len(sorted_calls) >= 3:
-    #             for i in range(len(sorted_calls) - 2):
-    #                 t1 = self._parse_start_time(sorted_calls[i])
-    #                 t2 = self._parse_start_time(sorted_calls[i + 1])
-    #                 t3 = self._parse_start_time(sorted_calls[i + 2])
-
-    #                 diff1 = (t2 - t1).total_seconds()
-    #                 diff2 = (t3 - t2).total_seconds()
-
-    #                 if diff1 >= self.MIN_GAP_SECONDS and diff2 >= self.MIN_GAP_SECONDS:
-    #                     is_conforme = True    
-    #                     break
-
-    #         if not is_conforme:
-    #             is_dispatched = self.STATUS_NON_CONFORM
-    #             is_compliant = self.STATUS_NON_CONFORM
-    #             comments.append(f' le temps entre les appels est moins de 2 heures ')
-
-
-    #     return {
-    #         'conformite_intervalle': is_dispatched,
-    #         # 'appels_branch': is_branch_calls,
-    #         'conformite_IAM': is_compliant,
-    #         'commentaire': ", ".join(comments)
-    #     }
-
-    def verify_compliance(self, df_dict: List[dict], calls_metadata: List[List[Any]], category: str, manifest_type: str, config: dict) -> pd.DataFrame:
-        """
-        Verify the compliance of the calls.
-        - Return the compliance dataframe   
-        """
-        logger.info(f'df_dict shape: {len(df_dict)}, calls_metadata shape: {len(calls_metadata)}')
-        
-        for i, row in enumerate(df_dict):
-            calls = calls_metadata[i] if i < len(calls_metadata) else []
-            result = self._verify_row(row, calls, category, manifest_type, config)
-            df_dict[i].update(result)
-        return df_dict
 
     def _group_results_by_commande(
         self, 
@@ -194,6 +78,17 @@ class ComplianceVerifier:
 
     def get_time(self, res: ComplianceInput) -> datetime:
         return self._parse_date_value(res.metadata.start_time)
+    
+    def get_effective_status(self, res: ComplianceInput) -> Tuple[str, bool]:
+            status = res.classification.status.strip().lower()
+            nb_beeps_ok = True
+
+            if status == "silence":
+                if res.beep_count < 5 and res.beep_count > 0 and res.high_beeps < 1:
+                    nb_beeps_ok = False
+                status = self.CLIENT_UNREACHABLE
+
+            return status, nb_beeps_ok
 
     def _process_injoignable_commande(
         self,
@@ -224,30 +119,21 @@ class ComplianceVerifier:
         
 
         # Sort results by start time
-        commande_results.sort(key=self.get_time)
+        commande_results.sort(key=self.get_time, reverse=True)
         
         # Helper to get effective status (handling silence logic)
-        def get_effective_status(res):
-            status = res.classification.status.strip().lower()
-            nb_beeps_ok = True
-
-            if status == "silence":
-                if res.beep_count < 5 and res.high_beeps < 1:
-                    nb_beeps_ok = False
-                status = self.CLIENT_UNREACHABLE
-
-            return status, nb_beeps_ok
+        
 
         last_result = commande_results[0]
         beep_count = last_result.beep_count
         high_beeps = last_result.high_beeps
         behavior = last_result.classification.behavior
-        classification_modele, _ = get_effective_status(last_result)
+        classification_modele, _ = self.get_effective_status(last_result)
 
         # 1. Check if last call is unreachable
         if classification_modele != self.CLIENT_UNREACHABLE:
             is_compliant = self.STATUS_NON_CONFORM
-            commentaire += f", Dernier appel non 'client injoignable' (Statut: {classification_modele}). "
+            commentaire += f" Dernier appel non conforme (Statut: {classification_modele}). "
             return beep_count, high_beeps, classification_modele, behavior, is_compliant, commentaire, False, False, self.get_time(last_result)   
         
         if len(commande_results) >= 3:
@@ -255,11 +141,11 @@ class ComplianceVerifier:
                 t1 = self.get_time(commande_results[i])
                 t2 = self.get_time(commande_results[i+1])
                 t3 = self.get_time(commande_results[i+2])
-                c_m_1, nb_beeps_ok_1 = get_effective_status(commande_results[i])
-                c_m_2, nb_beeps_ok_2 = get_effective_status(commande_results[i+1])
-                c_m_3, nb_beeps_ok_3 = get_effective_status(commande_results[i+2])
-                diff1 = (t2 - t1).total_seconds()
-                diff2 = (t3 - t2).total_seconds()
+                c_m_1, nb_beeps_ok_1 = self.get_effective_status(commande_results[i])
+                c_m_2, nb_beeps_ok_2 = self.get_effective_status(commande_results[i+1])
+                c_m_3, nb_beeps_ok_3 = self.get_effective_status(commande_results[i+2])
+                diff1 = (t1-t2).total_seconds()
+                diff2 = (t2-t3).total_seconds()
                 
                 if diff1 >= self.MIN_GAP_SECONDS and diff2 >= self.MIN_GAP_SECONDS and c_m_1 == self.CLIENT_UNREACHABLE and c_m_2 == self.CLIENT_UNREACHABLE and c_m_3 == self.CLIENT_UNREACHABLE:
                     has_consecutive_calls = True
@@ -291,7 +177,7 @@ class ComplianceVerifier:
         self,
         commande_results: List[ComplianceInput],
         row_data: dict
-    ) -> Tuple[int, int, str, str, str, str]:
+    ) -> Tuple[int, int, str, str, str, str, datetime]:
         """
         Process compliance verification for non-'injoignable' motif cases.
         
@@ -307,7 +193,7 @@ class ComplianceVerifier:
             
         Returns:
             Tuple of (beep_count, high_beeps, classification_modele, behavior,
-                     is_compliant, commentaire)
+                     is_compliant, commentaire, date_appel)
         """
         is_compliant = row_data.get('conformite_IAM', self.STATUS_CONFORM)
         commentaire = row_data.get('commentaire', '') or ''
@@ -326,12 +212,13 @@ class ComplianceVerifier:
         else:
             classification_modele = 'autre'
             behavior = ''
-        
+        classification_modele, _ = self.get_effective_status(first_result)
+
         # Verify classification matches expected motif
         
         if classification_modele.lower() != current_motif.lower():
             is_compliant = self.STATUS_NON_CONFORM
-            commentaire += f" Classification non conforme: {classification_modele.lower()}. "
+            commentaire += f" Declaration non conforme: {current_motif.lower()}. "
         
         return beep_count, high_beeps, classification_modele, behavior, is_compliant, commentaire, self.get_time(first_result)
     
@@ -496,9 +383,20 @@ class ComplianceVerifier:
             current_motif = row_data.get('motif_suspension')
             has_consecutive_calls = False
             conformite_nb_beeps = True
-            # Process based on motif type
+            beep_count = None   
+            high_beeps = None
+            classification_modele = None
+            behavior = None
+            is_compliant = None
+            commentaire = None
             date_appel = None
-            if current_motif.lower() == self.MOTIF_INJOIGNABLE:
+            if len(commande_results) == 0:
+                self._update_row_with_compliance_data(
+                    row_data, None, None, None, None, None, 'Aucun résultat trouvé', False, True, None
+                )
+                continue
+            # Process based on motif type
+            if current_motif and current_motif.lower() == self.MOTIF_INJOIGNABLE:
                 beep_count, high_beeps, classification_modele, behavior, is_compliant, commentaire, has_consecutive_calls, conformite_nb_beeps, date_appel = \
                     self._process_injoignable_commande(commande_results, row_data)
             else:
